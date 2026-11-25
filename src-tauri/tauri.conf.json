@@ -1,8 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "docshift",
+  "productName": "Kakiwake AI",
+  "mainBinaryName": "kakiwake-ai",
   "version": "0.1.0",
-  "identifier": "dev.docshift.app",
+  "identifier": "dev.kakiwake-ai.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +14,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "docshift",
+        "title": "Kakiwake AI",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

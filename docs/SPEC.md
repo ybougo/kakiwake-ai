@@ -1,4 +1,4 @@
-# docshift 仕様 v1.0
+# Kakiwake AI 仕様 v1.0
 
 ## 1. 目的
 
@@ -67,7 +67,7 @@ Copilot の角かっこ内のフラグは版によって存在しないため、
 
 ## 6. 設定
 
-`%APPDATA%\dev.docshift.app\settings.json` に保存する。
+`%APPDATA%\dev.kakiwake-ai.app\settings.json` に保存する。
 
 - 選択中のプロバイダ、プロバイダごとの設定（パス・モデル・推論量・追加引数）、追加したモデル ID
 - タイムアウト（10〜1800 秒、既定 180 秒）、品質チェック（既定オン）、NG のとき再変換（既定オフ）

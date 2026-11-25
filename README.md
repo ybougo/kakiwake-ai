@@ -1,4 +1,4 @@
-# docshift
+# Kakiwake AI
 
 プレーンテキスト・Markdown・AsciiDoc・Redmine（Textile）の 4 形式を、体裁を保ったまま相互変換する Windows 向けデスクトップアプリです。
 変換は手元にインストールした LLM CLI（Claude Code / Codex CLI / GitHub Copilot CLI）の単発実行で行います。
@@ -32,7 +32,7 @@
 
 ## 認証
 
-docshift 自身は認証情報を持ちません。各 CLI のログイン状態をそのまま使います。
+Kakiwake AI 自身は認証情報を持ちません。各 CLI のログイン状態をそのまま使います。
 
 | CLI         | ログイン            | API キー／トークンで使う場合        | 状態確認             |
 | ----------- | ------------------- | ----------------------------------- | -------------------- |
@@ -72,7 +72,7 @@ docshift 自身は認証情報を持ちません。各 CLI のログイン状態
 - **変換・品質**: 品質チェックの有効・無効、NG のとき 1 回だけ自動で再変換する、タイムアウト
 - **追加指示**: 変換先ごとにプロンプトへ追加する指示（例:「見出しの番号は削除する」）
 
-設定は `%APPDATA%\dev.docshift.app\settings.json` に保存されます。
+設定は `%APPDATA%\dev.kakiwake-ai.app\settings.json` に保存されます。
 
 ## 品質チェック
 
@@ -87,7 +87,7 @@ docshift 自身は認証情報を持ちません。各 CLI のログイン状態
 
 ## 外部通信について
 
-- 入力文書は、選んだ LLM CLI を通じてその LLM にだけ送られます。docshift 自身は外部と通信しません（CSP で外部接続を禁止し、フォント・画像もすべてローカル）。
+- 入力文書は、選んだ LLM CLI を通じてその LLM にだけ送られます。Kakiwake AI 自身は外部と通信しません（CSP で外部接続を禁止し、フォント・画像もすべてローカル）。
 - CLI は次の設定で起動します。
   - 共通: 空の一時ディレクトリで実行し、ツール（ファイル操作・シェル）は無効。本文は stdin で渡す
   - Claude: `--tools ""`、`--strict-mcp-config`、`--setting-sources ""`、`--no-session-persistence`。あわせて `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` ほかでテレメトリ・エラー報告・自動更新を停止
@@ -108,11 +108,11 @@ npm run tauri build    # インストーラー作成（target\release\bundle\ �
 ### WSL / Linux からクロスビルド
 
 ```bash
-scripts/build-windows.sh                                   # target/x86_64-pc-windows-msvc/release/docshift.exe
-scripts/build-windows.sh --copy /mnt/c/Users/<you>/Apps/docshift   # ビルド後に Windows 側へコピー
+scripts/build-windows.sh                                   # target/x86_64-pc-windows-msvc/release/kakiwake-ai.exe
+scripts/build-windows.sh --copy /mnt/c/Users/<you>/Apps/kakiwake-ai   # ビルド後に Windows 側へコピー
 ```
 
-sudo 不要です。初回だけ `llvm-rc`（apt のパッケージを展開するだけ）と、xwin で Microsoft CRT / Windows SDK を `~/.cache/docshift-xbuild` に取得します（Microsoft のライセンスへの同意が前提）。インストーラーは作らず、exe 単体を出力します。
+sudo 不要です。初回だけ `llvm-rc`（apt のパッケージを展開するだけ）と、xwin で Microsoft CRT / Windows SDK を `~/.cache/kakiwake-xbuild` に取得します（Microsoft のライセンスへの同意が前提）。インストーラーは作らず、exe 単体を出力します。
 
 | コマンド                                                                 | 内容                                                                                                                              |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -124,14 +124,14 @@ sudo 不要です。初回だけ `llvm-rc`（apt のパッケージを展開す�
 ### 構成
 
 ```
-crates/docshift-core/   GUI に依存しないコア（WSL / Linux でもテスト可能）
+crates/kakiwake-core/   GUI に依存しないコア（WSL / Linux でもテスト可能）
   src/format.rs         形式定義と、プロンプト用の記法早見表
   src/prompt.rs         プロンプト生成
   src/provider.rs       CLI の起動（引数・環境変数・タイムアウト・キャンセル・認証確認）
   src/postprocess.rs    前置き文・全体を囲むコードフェンスの除去
   src/detect.rs         変換元形式の自動判定
   src/quality.rs        品質チェック
-  src/bin/docshift-eval.rs  評価ツール
+  src/bin/kakiwake-eval.rs  評価ツール
   tests/fixtures/       評価用サンプル文書
 src-tauri/              Tauri 2 アプリ（コマンド・設定保存）
 src/                    Svelte 5 + TypeScript の画面

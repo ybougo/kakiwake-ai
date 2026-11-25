@@ -1,5 +1,5 @@
 [package]
-name = "docshift"
+name = "kakiwake-ai"
 description = "Plain text / Markdown / AsciiDoc / Teams / Redmine Textile converter powered by LLM CLIs"
 version.workspace = true
 edition.workspace = true
@@ -7,14 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "docshift_lib"
+name = "kakiwake_ai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-docshift-core = { path = "../crates/docshift-core" }
+kakiwake-core = { path = "../crates/kakiwake-core" }
 tauri = { version = "2.12", features = [] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

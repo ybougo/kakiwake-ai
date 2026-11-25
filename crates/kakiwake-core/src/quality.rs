@@ -674,7 +674,7 @@ fn lint_rules(to: Format) -> Vec<LintRule> {
     let fence = r(r"^\s*```", "Markdown のコードフェンス（```）が残っています");
     let tx_link = r(r#""[^"\n]+":https?://"#, "Textile のリンク記法が残っています");
     let bq = r(r"^bq\.\s", "Textile の引用記法（bq.）が残っています");
-    let tag = r(r"</?DOCSHIFT_INPUT", "入力の区切りタグが出力に残っています");
+    let tag = r(r"</?KAKIWAKE_INPUT", "入力の区切りタグが出力に残っています");
     let mut v = vec![tag];
     match to {
         Format::Md => v.extend([textile_heading, adoc_heading, adoc_table, adoc_source, pre, tx_link, bq]),

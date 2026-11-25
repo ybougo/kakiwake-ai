@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# WSL / Linux から Windows (x86_64-pc-windows-msvc) 向けの docshift.exe をクロスビルドする。
-# sudo 不要。ツール類は ~/.cache/docshift-xbuild に置く。
+# WSL / Linux から Windows (x86_64-pc-windows-msvc) 向けの kakiwake-ai.exe をクロスビルドする。
+# sudo 不要。ツール類は ~/.cache/kakiwake-xbuild に置く。
 #
 #   scripts/build-windows.sh            # exe をビルド
-#   scripts/build-windows.sh --copy DIR # ビルド後に DIR（例: /mnt/c/Users/me/Apps/docshift）へコピー
+#   scripts/build-windows.sh --copy DIR # ビルド後に DIR（例: /mnt/c/Users/me/Apps/kakiwake-ai）へコピー
 #
 # 初回のみ Microsoft CRT / Windows SDK をダウンロードする（xwin。Microsoft のライセンスに同意したものとみなす）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CACHE="${DOCSHIFT_XBUILD_DIR:-$HOME/.cache/docshift-xbuild}"
+CACHE="${KAKIWAKE_XBUILD_DIR:-$HOME/.cache/kakiwake-xbuild}"
 TARGET=x86_64-pc-windows-msvc
 LLVM_VER="${LLVM_VER:-20}"
 COPY_TO=""
@@ -52,17 +52,17 @@ echo "==> フロントエンドをビルド"
 (cd "$ROOT" && { [[ -d node_modules ]] || npm ci; } && npm run build)
 
 # 5. Rust（リンカは rust-lld）
-echo "==> docshift.exe をビルド"
+echo "==> kakiwake-ai.exe をビルド"
 export PATH="$BIN:$PATH"
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-Lnative=$XWIN_DIR/crt/lib/x86_64 -Lnative=$XWIN_DIR/sdk/lib/um/x86_64 -Lnative=$XWIN_DIR/sdk/lib/ucrt/x86_64"
 export INCLUDE="$XWIN_DIR/crt/include;$XWIN_DIR/sdk/include/ucrt;$XWIN_DIR/sdk/include/um;$XWIN_DIR/sdk/include/shared"
-(cd "$ROOT" && cargo build --release -p docshift --target "$TARGET" --features tauri/custom-protocol)
+(cd "$ROOT" && cargo build --release -p kakiwake-ai --target "$TARGET" --features tauri/custom-protocol)
 
-EXE="$ROOT/target/$TARGET/release/docshift.exe"
+EXE="$ROOT/target/$TARGET/release/kakiwake-ai.exe"
 echo "==> $EXE"
 if [[ -n "$COPY_TO" ]]; then
   mkdir -p "$COPY_TO"
   cp "$EXE" "$COPY_TO/"
-  echo "==> $COPY_TO/docshift.exe にコピーしました"
+  echo "==> $COPY_TO/kakiwake-ai.exe にコピーしました"
 fi

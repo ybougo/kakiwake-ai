@@ -1,4 +1,4 @@
-//! docshift のコアロジック（GUI に依存しない）。
+//! Kakiwake AI のコアロジック（GUI に依存しない）。
 
 pub mod detect;
 pub mod format;

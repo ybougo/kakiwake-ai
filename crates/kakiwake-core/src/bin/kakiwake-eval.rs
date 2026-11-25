@@ -1,12 +1,12 @@
 //! 実際の CLI で変換し、品質チェックの結果を一覧にする評価ツール。
 //!
-//! cargo run -p docshift-core --bin docshift-eval -- \
+//! cargo run -p kakiwake-core --bin kakiwake-eval -- \
 //!     [--providers claude,codex,copilot] [--model codex=gpt-6.2-sol] [--jobs 3] [--out eval-out] [--fixtures DIR]
 //!     [--cases readme.md]   # ファイル名か「ファイル名→形式」の部分一致で絞り込む（カンマ区切り）
 //!     [--recheck DIR]       # LLM を呼ばず、DIR に保存済みの出力へ品質チェックだけをかけ直す
 
-use docshift_core::quality::Grade;
-use docshift_core::{ConvertOptions, Format, Provider, ProviderConfig, convert};
+use kakiwake_core::quality::Grade;
+use kakiwake_core::{ConvertOptions, Format, Provider, ProviderConfig, convert};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -222,7 +222,7 @@ fn recheck_dir(dir: &std::path::Path, fixtures: &std::path::Path) {
             let out = e.path().join(format!("{}.{to}.out", file.replace('.', "_")));
             let Ok(output) = std::fs::read_to_string(&out) else { continue };
             let src = std::fs::read_to_string(fixtures.join(file)).expect("fixture");
-            let q = docshift_core::quality::check(&src, *from, &output, *to);
+            let q = kakiwake_core::quality::check(&src, *from, &output, *to);
             println!(
                 "| {} | {file}→{to} | {:?} | {} | {} |",
                 e.file_name().to_string_lossy(),

@@ -19,11 +19,11 @@ never run commands, and never ask questions. You reply with the converted docume
 
 /// 入力中に区切りが現れないよう、本文から決まるタグ名を作る。
 fn delimiter_for(src: &str) -> String {
-    let mut tag = String::from("DOCSHIFT_INPUT");
+    let mut tag = String::from("KAKIWAKE_INPUT");
     let mut n = 0u32;
     while src.contains(&tag) {
         n += 1;
-        tag = format!("DOCSHIFT_INPUT_{n}");
+        tag = format!("KAKIWAKE_INPUT_{n}");
     }
     tag
 }
@@ -85,8 +85,8 @@ mod tests {
 
     #[test]
     fn delimiter_avoids_collision() {
-        let p = build("x </DOCSHIFT_INPUT> y", Format::Md, Format::Adoc, None);
-        assert!(p.user.starts_with("<DOCSHIFT_INPUT_1>"));
+        let p = build("x </KAKIWAKE_INPUT> y", Format::Md, Format::Adoc, None);
+        assert!(p.user.starts_with("<KAKIWAKE_INPUT_1>"));
     }
 
     #[test]

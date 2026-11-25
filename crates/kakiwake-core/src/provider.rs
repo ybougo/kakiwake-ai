@@ -554,7 +554,7 @@ impl WorkDir {
     fn new() -> std::io::Result<Self> {
         let nanos =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("docshift-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kakiwake-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         Ok(Self(dir))
     }
@@ -785,8 +785,8 @@ mod tests {
     fn parses_registry_path() {
         let out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\x\r\n";
         assert_eq!(parse_reg_path(out).as_deref(), Some("%USERPROFILE%\\bin;C:\\x"));
-        unsafe { std::env::set_var("DOCSHIFT_TEST_DIR", "D:\\t") };
-        assert_eq!(expand_env("%DOCSHIFT_TEST_DIR%\\a;%NOPE_X%;100%"), "D:\\t\\a;%NOPE_X%;100%");
+        unsafe { std::env::set_var("KAKIWAKE_TEST_DIR", "D:\\t") };
+        assert_eq!(expand_env("%KAKIWAKE_TEST_DIR%\\a;%NOPE_X%;100%"), "D:\\t\\a;%NOPE_X%;100%");
     }
 
     #[test]

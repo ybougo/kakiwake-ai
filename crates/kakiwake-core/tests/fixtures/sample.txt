@@ -21,6 +21,6 @@
 鈴木	性能測定（1万行のファイル）	12/1
 佐藤	社内Wikiの更新	12/4
 
-参考資料：https://wiki.example.com/docshift/spec
+参考資料：https://wiki.example.com/kakiwake-ai/spec
 
 以上

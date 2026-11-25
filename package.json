@@ -1,5 +1,5 @@
 {
-  "name": "docshift",
+  "name": "kakiwake-ai",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,10 +10,10 @@
     "tauri": "tauri",
     "lint": "npm run lint:web && npm run lint:rust",
     "lint:web": "prettier --check . && eslint . && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
-    "lint:rust": "cargo fmt --all --check && cargo clippy -p docshift-core --all-targets -- -D warnings",
+    "lint:rust": "cargo fmt --all --check && cargo clippy -p kakiwake-core --all-targets -- -D warnings",
     "format": "prettier --write . && cargo fmt --all",
-    "test": "cargo test -p docshift-core",
-    "eval": "cargo run -p docshift-core --bin docshift-eval --"
+    "test": "cargo test -p kakiwake-core",
+    "eval": "cargo run -p kakiwake-core --bin kakiwake-eval --"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.5"

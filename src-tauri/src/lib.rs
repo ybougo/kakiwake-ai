@@ -1,4 +1,4 @@
-use docshift_core::{Conversion, ConvertOptions, Format, Provider, ProviderConfig, detect, provider, quality};
+use kakiwake_core::{Conversion, ConvertOptions, Format, Provider, ProviderConfig, detect, provider, quality};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -67,28 +67,9 @@ fn load_settings(app: &tauri::AppHandle) -> Settings {
     settings_path(app)
         .ok()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .map(migrate)
-        .and_then(|v| serde_json::from_value::<Settings>(v).ok())
+        .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
         .unwrap_or_default()
         .normalized()
-}
-
-/// 廃止した形式（teams）が残った古い設定でも、他の設定を失わずに読めるようにする。
-fn migrate(mut v: serde_json::Value) -> serde_json::Value {
-    let known = |f: &str| Format::ALL.iter().any(|x| x.id() == f);
-    if let Some(obj) = v.as_object_mut() {
-        if obj.get("last_to").and_then(|x| x.as_str()).is_some_and(|f| !known(f)) {
-            obj.insert("last_to".into(), "md".into());
-        }
-        if obj.get("last_from").and_then(|x| x.as_str()).is_some_and(|f| !known(f)) {
-            obj.insert("last_from".into(), serde_json::Value::Null);
-        }
-        if let Some(extra) = obj.get_mut("extra_instructions").and_then(|x| x.as_object_mut()) {
-            extra.retain(|k, _| known(k));
-        }
-    }
-    v
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +187,7 @@ fn open_login(app: tauri::AppHandle, provider: Provider) -> Result<(), String> {
     {
         // 新しいコンソールでログインコマンドを実行し、終わってもウィンドウを残す
         let mut cmd = std::process::Command::new("cmd.exe");
-        cmd.arg("/c").arg("start").arg("docshift login").arg("cmd.exe").arg("/k").arg(&exe);
+        cmd.arg("/c").arg("start").arg("Kakiwake AI login").arg("cmd.exe").arg("/k").arg(&exe);
         cmd.args(provider.login_args());
         cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
     }
@@ -292,7 +273,7 @@ async fn convert(
         let send = |t: &str| {
             let _ = on_stream.send(StreamMsg::Text { text: t.to_string() });
         };
-        let r = docshift_core::convert(&req.source, from, req.to, &opts, Some(rx), Some(&send)).await;
+        let r = kakiwake_core::convert(&req.source, from, req.to, &opts, Some(rx), Some(&send)).await;
         jobs.0.lock().unwrap().remove(&req.job_id);
         let c = r.map_err(|e| e.to_string())?;
         let is_ng = c.quality.as_ref().is_some_and(|q| q.grade == quality::Grade::Ng);
@@ -329,27 +310,5 @@ pub fn run() {
             cancel
         ])
         .run(tauri::generate_context!())
-        .expect("error while running docshift");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn migrates_removed_teams_format() {
-        let old = serde_json::json!({
-            "provider": "codex",
-            "timeout_sec": 90,
-            "last_to": "teams",
-            "last_from": "teams",
-            "extra_instructions": { "teams": "x", "md": "keep" }
-        });
-        let s: Settings = serde_json::from_value(migrate(old)).unwrap();
-        assert_eq!(s.provider, Provider::Codex);
-        assert_eq!(s.timeout_sec, 90);
-        assert_eq!(s.last_to, Format::Md);
-        assert_eq!(s.last_from, None);
-        assert_eq!(s.extra_instructions.get(&Format::Md).map(String::as_str), Some("keep"));
-    }
+        .expect("error while running kakiwake-ai");
 }

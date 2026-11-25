@@ -8,7 +8,7 @@ static PREFACE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 static FENCE_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(```+|~~~+)[A-Za-z0-9_+.\-]*\s*$").unwrap());
-static TAG_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^</?DOCSHIFT_INPUT(_\d+)?>\s*$").unwrap());
+static TAG_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^</?KAKIWAKE_INPUT(_\d+)?>\s*$").unwrap());
 
 /// LLM の出力から変換結果以外の付随物を取り除く。
 /// `source` は「元から全体がコードブロックだった」等の誤除去を避けるために使う。
@@ -111,6 +111,6 @@ mod tests {
 
     #[test]
     fn strips_echoed_tags() {
-        assert_eq!(clean("<DOCSHIFT_INPUT>\nh1. T\n</DOCSHIFT_INPUT>", "# T"), "h1. T\n");
+        assert_eq!(clean("<KAKIWAKE_INPUT>\nh1. T\n</KAKIWAKE_INPUT>", "# T"), "h1. T\n");
     }
 }
