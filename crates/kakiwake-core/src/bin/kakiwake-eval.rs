@@ -158,6 +158,7 @@ async fn run_case(
         config: &cfg,
         timeout: Duration::from_secs(300),
         extra_instructions: None,
+        translation: None,
         quality_check: true,
     };
     let started = std::time::Instant::now();

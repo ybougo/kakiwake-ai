@@ -4,6 +4,12 @@ export type Format = "plain" | "md" | "adoc" | "textile";
 export type Provider = "claude" | "codex" | "copilot";
 export type Grade = "ok" | "warn" | "ng";
 
+export const TRANSLATION_LANGUAGES = [
+  { id: "japanese", label: "日本語" },
+  { id: "english", label: "英語" },
+] as const;
+export type TranslationLanguage = (typeof TRANSLATION_LANGUAGES)[number]["id"];
+
 export const FORMATS: { id: Format; label: string; short: string }[] = [
   { id: "plain", label: "プレーンテキスト", short: "Text" },
   { id: "md", label: "Markdown", short: "Markdown" },
@@ -91,6 +97,7 @@ export interface ConvertRequest {
   source: string;
   from: Format | null;
   to: Format;
+  translation: TranslationLanguage | null;
   provider: Provider;
   model: string;
   effort: string | null;

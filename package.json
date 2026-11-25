@@ -1,7 +1,7 @@
 {
   "name": "kakiwake-ai",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -17,7 +17,11 @@
     "eval": "cargo run -p kakiwake-core --bin kakiwake-eval --"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.12.5"
+    "@asciidoctor/core": "4.3.0",
+    "@tauri-apps/api": "2.12.5",
+    "dompurify": "3.5.0",
+    "marked": "18.3.0",
+    "textile-js": "2.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

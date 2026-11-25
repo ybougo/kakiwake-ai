@@ -8,6 +8,7 @@ pub mod provider;
 pub mod quality;
 
 pub use format::Format;
+pub use prompt::TranslationLanguage;
 pub use provider::{Provider, ProviderConfig};
 
 use serde::Serialize;
@@ -29,6 +30,7 @@ pub struct ConvertOptions<'a> {
     pub config: &'a ProviderConfig,
     pub timeout: Duration,
     pub extra_instructions: Option<&'a str>,
+    pub translation: Option<TranslationLanguage>,
     pub quality_check: bool,
 }
 
@@ -41,9 +43,13 @@ pub async fn convert(
     cancel: Option<tokio::sync::oneshot::Receiver<()>>,
     on_text: Option<provider::OnText<'_>>,
 ) -> Result<Conversion, provider::RunError> {
-    let prompt = prompt::build(src, from, to, opts.extra_instructions);
+    let prompt = prompt::build(src, from, to, opts.extra_instructions, opts.translation);
     let out = provider::run(opts.provider, opts.config, &prompt, opts.timeout, cancel, on_text).await?;
-    let output = postprocess::clean(&out.text, src, &prompt.tag);
-    let quality = opts.quality_check.then(|| quality::check(src, from, &output, to));
+    let output = if opts.translation.is_some() {
+        postprocess::clean_translation(&out.text, src, &prompt.tag)
+    } else {
+        postprocess::clean(&out.text, src, &prompt.tag)
+    };
+    let quality = (opts.quality_check && opts.translation.is_none()).then(|| quality::check(src, from, &output, to));
     Ok(Conversion { from, to, output, raw_output: out.text, elapsed_ms: out.elapsed_ms, command: out.command, quality })
 }

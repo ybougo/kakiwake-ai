@@ -7,11 +7,32 @@ static PREFACE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+static TRANSLATION_PREFACE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?ix)^(?:
+            (?:(?:sure|certainly|of\s+course)[!,]\s+)?
+            (?:here\s+is|here['’]s|below\s+is|the\s+following\s+is)\s+(?:(?:the|your)\s+)?
+            (?:(?:english|japanese)\s+)?(?:translation|translated\s+(?:document|text|version))
+            (?:\s+of\s+(?:the|your)\s+(?:document|text))?(?:\s+in\s+(?:english|japanese))?
+            |(?:(?:以下|こちら)(?:は|が)\s*)?(?:翻訳(?:結果|文)|訳文|(?:日本語|英語)訳)(?:です)
+        )\s*[:：]$",
+    )
+    .unwrap()
+});
 static FENCE_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(```+|~~~+)[A-Za-z0-9_+.\-]*\s*$").unwrap());
 
 /// LLM の出力から変換結果以外の付随物を取り除く。
 /// `source` は「元から全体がコードブロックだった」等の誤除去を避けるために使う。
 pub fn clean(raw: &str, source: &str, tag: &str) -> String {
+    clean_output(raw, source, tag, false)
+}
+
+/// 翻訳結果の前置きは、明示的なラベルだけを除く。
+pub fn clean_translation(raw: &str, source: &str, tag: &str) -> String {
+    clean_output(raw, source, tag, true)
+}
+
+fn clean_output(raw: &str, source: &str, tag: &str, translation: bool) -> String {
     let text = raw.replace("\r\n", "\n").replace('\r', "\n");
     let mut lines: Vec<&str> = text.lines().collect();
 
@@ -21,12 +42,14 @@ pub fn clean(raw: &str, source: &str, tag: &str) -> String {
     trim_blank(&mut lines);
 
     // 先頭の前置き文（「以下が変換結果です:」など）＋空行 を除去
-    if lines.len() > 2 {
+    if lines.len() > 2 && (lines[1].trim().is_empty() || FENCE_OPEN.is_match(lines[1].trim())) {
         let first = lines[0].trim();
-        let looks_preface = PREFACE.is_match(first)
-            && (first.ends_with(':') || first.ends_with('：') || first.ends_with('。') || first.ends_with('.'))
-            && !source.trim_start().starts_with(first);
-        if looks_preface && (lines[1].trim().is_empty() || FENCE_OPEN.is_match(lines[1].trim())) {
+        let looks_preface = if translation {
+            TRANSLATION_PREFACE.is_match(first)
+        } else {
+            PREFACE.is_match(first) && first.ends_with([':', '：', '。', '.'])
+        };
+        if looks_preface && !source.trim_start().starts_with(first) {
             lines.remove(0);
             trim_blank(&mut lines);
         }
@@ -122,6 +145,38 @@ mod tests {
     fn strips_preface() {
         assert_eq!(clean("以下が変換結果です。\n\nh1. T\n\nbody", "# T\n\nbody", TAG), "h1. T\n\nbody\n");
         assert_eq!(clean("Here is the converted document:\n```\n= T\nx\n```", "# T\nx", TAG), "= T\nx\n");
+    }
+
+    #[test]
+    fn keeps_translated_first_sentence() {
+        let output = "Here is the overview.\n\nSee the following steps.\n";
+        assert_eq!(clean_translation(output, "概要は次のとおりです。", TAG), output);
+    }
+
+    #[test]
+    fn strips_translation_label_before_blank_line_or_fence() {
+        assert_eq!(clean_translation("Here is the translation:\n\n# Hello", "# こんにちは", TAG), "# Hello\n");
+        assert_eq!(
+            clean_translation("Sure! Here's the Japanese translation of the document:\n\nこんにちは", "Hello", TAG),
+            "こんにちは\n"
+        );
+        assert_eq!(clean_translation("以下は日本語訳です：\n\nこんにちは", "Hello", TAG), "こんにちは\n");
+        assert_eq!(
+            clean_translation("以下は翻訳結果です：\n```md\n# こんにちは\n```", "# Hello", TAG),
+            "# こんにちは\n"
+        );
+    }
+
+    #[test]
+    fn keeps_translated_headings_and_inline_labels() {
+        for output in [
+            "Here is the overview:\n\nThe first step.",
+            "Translation:\n\nAn example.",
+            "翻訳結果：\n\n本文です。",
+            "Here is the translation:\nAn example.",
+        ] {
+            assert_eq!(clean_translation(output, "原文", TAG), format!("{output}\n"));
+        }
     }
 
     #[test]

@@ -1,6 +1,8 @@
 mod log;
 
-use kakiwake_core::{Conversion, ConvertOptions, Format, Provider, ProviderConfig, detect, provider, quality};
+use kakiwake_core::{
+    Conversion, ConvertOptions, Format, Provider, ProviderConfig, TranslationLanguage, detect, provider, quality,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -237,6 +239,7 @@ struct ConvertRequest {
     /// None なら自動判定
     from: Option<Format>,
     to: Format,
+    translation: Option<TranslationLanguage>,
     provider: Provider,
     model: String,
     effort: Option<String>,
@@ -292,13 +295,14 @@ async fn convert(
         config: &cfg,
         timeout: Duration::from_secs(settings.timeout_sec),
         extra_instructions: extra.as_deref(),
+        translation: req.translation,
         quality_check: settings.quality_check || settings.retry_on_ng,
     };
 
     log::write(
         &app,
         &format!(
-            "convert#{} start: {} model={} effort={} from={}{} to={} chars={}",
+            "convert#{} start: {} model={} effort={} from={}{} to={} chars={}{}",
             req.job_id,
             req.provider.id(),
             cfg.model,
@@ -306,7 +310,8 @@ async fn convert(
             from,
             if detected_from { "(auto)" } else { "" },
             req.to,
-            req.source.chars().count()
+            req.source.chars().count(),
+            req.translation.map(|language| format!(" translation={}", language.name())).unwrap_or_default()
         ),
     );
     let started = Instant::now();
@@ -326,9 +331,6 @@ async fn convert(
         let c = match r {
             Ok(c) => c,
             Err(e) => {
-                if matches!(&e, provider::RunError::ClaudeReasoningRefusal { .. }) {
-                    let _ = on_stream.send(StreamMsg::Reset);
-                }
                 // ログには本文が混ざらない要約だけを書く（全文は画面にだけ出す）
                 log::write(
                     &app,

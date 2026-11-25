@@ -515,6 +515,16 @@ const CODEX_TOOL_ITEMS: &[&str] =
 
 /// 実行する引数を組み立てる（テストと表示用に分離）。
 pub fn build_args(provider: Provider, cfg: &ProviderConfig, last_message_file: &Path, help: &str) -> Vec<String> {
+    build_args_with_preamble(provider, cfg, last_message_file, help, crate::prompt::SYSTEM_PREAMBLE)
+}
+
+fn build_args_with_preamble(
+    provider: Provider,
+    cfg: &ProviderConfig,
+    last_message_file: &Path,
+    help: &str,
+    preamble: &'static str,
+) -> Vec<String> {
     let model = if cfg.model.trim().is_empty() { provider.default_model() } else { cfg.model.trim() };
     let effort = cfg.effort.trim();
     let mut a: Vec<String> = Vec::new();
@@ -532,7 +542,7 @@ pub fn build_args(provider: Provider, cfg: &ProviderConfig, last_message_file: &
             // Windows の .cmd シム経由でも安全に渡せるよう、引数は改行なしの短い 1 行だけにする。
             // 変換規則と本文はすべて stdin で渡す。
             a.push("--system-prompt".into());
-            a.push(crate::prompt::SYSTEM_PREAMBLE.into());
+            a.push(preamble.into());
             if !effort.is_empty() {
                 a.extend(["--effort".into(), effort.into()]);
             }
@@ -690,7 +700,7 @@ pub async fn run(
     let work = WorkDir::new()?;
     let last_msg = work.0.join("last-message.txt");
     let help = help_text(provider, &exe).await;
-    let args = build_args(provider, cfg, &last_msg, &help);
+    let args = build_args_with_preamble(provider, cfg, &last_msg, &help, prompt.claude_preamble());
     let command = display_command(&exe, &args);
 
     let mut cmd = base_command(&exe);
@@ -1026,7 +1036,7 @@ mod tests {
             path: path.to_string_lossy().into_owned(),
             ..ProviderConfig::for_provider(Provider::Claude)
         };
-        let prompt = crate::prompt::build("# Sample", crate::Format::Md, crate::Format::Md, None);
+        let prompt = crate::prompt::build("# Sample", crate::Format::Md, crate::Format::Md, None, None);
         let error = run(Provider::Claude, &cfg, &prompt, Duration::from_secs(5), None, None).await.unwrap_err();
         assert!(matches!(&error, RunError::ClaudeReasoningRefusal { .. }), "{error:?}");
         assert!(error.to_string().contains("Request ID: req_test401"));
@@ -1126,5 +1136,30 @@ mod tests {
         assert!(g.contains(&"--deny-tool=url".to_string()));
         assert!(!g.contains(&"--disable-client-telemetry".to_string()));
         assert!(!g.contains(&"-p".to_string()));
+    }
+
+    #[test]
+    fn claude_uses_translation_preamble_in_command_and_stdin() {
+        let prompt = crate::prompt::build(
+            "Hello",
+            crate::Format::Md,
+            crate::Format::Md,
+            None,
+            Some(crate::TranslationLanguage::Japanese),
+        );
+        let preamble = prompt.claude_preamble();
+        let args = build_args_with_preamble(
+            Provider::Claude,
+            &ProviderConfig::for_provider(Provider::Claude),
+            Path::new("last-message.txt"),
+            "",
+            preamble,
+        );
+        assert!(preamble.contains("document translator"));
+        assert!(!preamble.contains('\n'));
+        assert!(args.windows(2).any(|w| w[0] == "--system-prompt" && w[1] == preamble));
+        let payload = stdin_payload(&prompt);
+        assert!(payload.starts_with(preamble));
+        assert!(payload.contains("Output ONLY the translated document"));
     }
 }

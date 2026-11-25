@@ -4,14 +4,17 @@
     api,
     errorText,
     FORMATS,
+    TRANSLATION_LANGUAGES,
     type Format,
     type Provider,
     type ProviderInfo,
     type ProviderStatus,
     type QualityReport,
     type Settings,
+    type TranslationLanguage,
   } from "./lib/api";
   import ModelPicker from "./lib/ModelPicker.svelte";
+  import OutputPreview from "./lib/OutputPreview.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
 
   let catalog = $state<ProviderInfo[]>([]);
@@ -21,7 +24,10 @@
   let source = $state("");
   let from = $state<Format | "auto">("auto");
   let to = $state<Format>("md");
+  let translation = $state<TranslationLanguage | "">("");
   let output = $state("");
+  let outputFormat = $state<Format | null>(null);
+  let showPreview = $state(false);
   let quality = $state<QualityReport | null>(null);
   /** 実際に使った変換元（自動判定の結果を含む）。品質バッジのツールチップに出す */
   let usedFrom = $state<{ format: Format; detected: boolean } | null>(null);
@@ -46,6 +52,8 @@
   const canConvert = $derived(
     !starting && !running && settings !== null && source.trim() !== "" && status?.ok !== false,
   );
+  const previewAvailable = $derived(!running && output.trim() !== "");
+  const previewVisible = $derived(previewAvailable && showPreview);
   const qualityTitle = $derived.by(() => {
     if (!quality) return "";
     const label = FORMATS.find((f) => f.id === usedFrom?.format)?.label ?? "";
@@ -101,6 +109,8 @@
       s.last_from = from === "auto" ? null : from;
     });
     output = "";
+    outputFormat = to;
+    showPreview = false;
     quality = null;
     try {
       const r = await api.convert(
@@ -109,25 +119,30 @@
           source,
           from: from === "auto" ? null : from,
           to,
+          translation: translation || null,
           provider,
           model,
           effort: null,
         },
         (text) => {
-          if (id !== jobId) return;
+          if (id !== jobId || !running) return;
           output += text;
           followOutput();
         },
         () => {
-          if (id === jobId) output = "";
+          if (id === jobId && running) output = "";
         },
       );
       if (id !== jobId) return;
       output = r.output;
+      outputFormat = r.to;
       quality = r.quality;
       usedFrom = { format: r.from, detected: r.detected_from };
     } catch (e) {
-      if (id === jobId) fail("convert", e, false);
+      if (id === jobId) {
+        output = "";
+        fail("convert", e, false);
+      }
     } finally {
       if (id === jobId) running = false;
     }
@@ -142,10 +157,12 @@
     if (nearBottom) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
   }
 
-  async function cancel() {
-    await api.cancel(jobId).catch(() => {});
-    jobId++;
+  function cancel() {
+    if (!running) return;
+    const id = jobId++;
+    output = "";
     running = false;
+    void api.cancel(id).catch(() => {});
   }
 
   async function copy() {
@@ -184,6 +201,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    if (e.defaultPrevented || (showSettings && settings)) return;
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       convert();
@@ -237,24 +255,30 @@
           {/each}
         </select>
       </div>
-      <textarea bind:value={source} placeholder="ここに貼り付け（Ctrl+Enter で変換）" spellcheck="false"></textarea>
+      <textarea bind:value={source} placeholder="テキストを貼り付け（Ctrl+Enter で変換）" spellcheck="false"></textarea>
     </section>
 
     <div class="middle">
+      <select bind:value={translation} aria-label="翻訳先" title="翻訳先">
+        <option value="">翻訳なし</option>
+        {#each TRANSLATION_LANGUAGES as language (language.id)}
+          <option value={language.id}>{language.label}</option>
+        {/each}
+      </select>
       {#if running}
         <button class="primary" onclick={cancel} title="Esc">
           <span class="spinner" aria-hidden="true"></span>中止
         </button>
       {:else}
         <button class="primary" onclick={convert} disabled={!canConvert} title="Ctrl+Enter">
-          {starting ? "起動準備中…" : "変換 →"}
+          {starting ? "起動準備中…" : translation ? "翻訳して変換 →" : "変換 →"}
         </button>
       {/if}
     </div>
 
     <section class="pane">
       <div class="progress" class:on={running} aria-hidden="true"></div>
-      <div class="pane-head">
+      <div class="pane-head output-head">
         <div class="seg" role="tablist" aria-label="変換先">
           {#each FORMATS as f (f.id)}
             <button role="tab" aria-selected={to === f.id} class:active={to === f.id} onclick={() => (to = f.id)}>
@@ -263,18 +287,33 @@
           {/each}
         </div>
         <div class="spacer"></div>
-        {#if quality && !running}
-          <span class="badge {quality.grade}" title={qualityTitle}>{quality.grade.toUpperCase()}</span>
-        {/if}
-        <button onclick={copy} disabled={!output || running}>{copied ? "✓" : "コピー"}</button>
+        <div class="output-actions">
+          {#if quality && !running}
+            <span class="badge {quality.grade}" title={qualityTitle}>{quality.grade.toUpperCase()}</span>
+          {/if}
+          <button
+            class="preview-toggle"
+            aria-pressed={previewVisible}
+            disabled={!previewAvailable}
+            onclick={() => (showPreview = !showPreview)}
+          >
+            プレビュー
+          </button>
+          <button onclick={copy} disabled={!output || running}>{copied ? "✓" : "コピー"}</button>
+        </div>
       </div>
-      <textarea
-        bind:this={outputEl}
-        bind:value={output}
-        readonly={running}
-        aria-busy={running}
-        placeholder={running ? "変換中…" : ""}
-        spellcheck="false"></textarea>
+      {#if previewVisible}
+        <OutputPreview format={outputFormat ?? to} source={output} />
+      {:else}
+        <textarea
+          bind:this={outputEl}
+          bind:value={output}
+          readonly={running}
+          aria-busy={running}
+          aria-label="変換結果の原文"
+          placeholder={running ? "変換中…" : ""}
+          spellcheck="false"></textarea>
+      {/if}
     </section>
   </main>
 
