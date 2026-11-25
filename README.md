@@ -85,15 +85,20 @@ Kakiwake AI 自身は認証情報を持ちません。各 CLI のログイン状
 
 `NG` の条件は、出力が空、内容の保持が 85% 未満、元にない内容が多い、URL が 3 件以上欠落のいずれかです。
 
-## 外部通信について
+## 外部通信とセキュリティ
 
-- 入力文書は、選んだ LLM CLI を通じてその LLM にだけ送られます。Kakiwake AI 自身は外部と通信しません（CSP で外部接続を禁止し、フォント・画像もすべてローカル）。
-- CLI は次の設定で起動します。
-  - 共通: 空の一時ディレクトリで実行し、ツール（ファイル操作・シェル）は無効。本文は stdin で渡す
-  - Claude: `--tools ""`、`--strict-mcp-config`、`--setting-sources ""`、`--no-session-persistence`。あわせて `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` ほかでテレメトリ・エラー報告・自動更新を停止
-  - Codex: `--sandbox read-only`、`--ephemeral`、MCP 無効、Web 検索無効、`analytics.enabled=false`、更新確認なし
-  - Copilot: `--available-tools=`（ツールなし）、組み込み MCP 無効、自動更新なし（`COPILOT_AUTO_UPDATE=false`）、クライアントテレメトリ無効（対応している版のみ）
-- CLI 本体の認証・LLM 呼び出しに伴う通信は各 CLI の仕様に従います。
+- 入力文書は、選んだ LLM CLI を通じてその LLM にだけ送られます。Kakiwake AI 自身は外部と通信しません（CSP で外部接続を禁止し、フォント・画像もすべてローカル。Tauri のプラグインも使っていません）。
+- CLI は、空の一時ディレクトリをカレントにし、本文を stdin で渡して起動します。変換にツールは不要なので、各 CLI のツールを止めています。
+
+| CLI     | ツールの止め方                                                                                                                              | 確認結果                                                                                                                                          |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude  | `--tools ""`、`--strict-mcp-config`、`--setting-sources ""`                                                                                 | ツールなし。ファイルを読む指示にも応じない                                                                                                        |
+| Copilot | `--available-tools=none`、`--deny-tool=shell/write/read/memory/url`、`--disable-builtin-mcps`、`--no-ask-user`                              | ツールなし。`--available-tools=`（空）は「制限なし」扱いで bash が動いたため、この指定にしている                                                  |
+| Codex   | `--sandbox read-only`、`features.*=false`（シェル、画像読み込み、ChatGPT 連携アプリ、Web 検索、プラグイン、サブエージェントなど）、MCP 無効 | シェル・外部連携は使えない。**ファイル編集（apply_patch）だけは止める設定がなく、read-only でも作業ディレクトリ外に書けた**（codex 0.162 で確認） |
+
+- **Codex の残るリスク**: 文書に紛れた指示に従ってファイルを書き換える可能性があります。対策として Codex のイベントを監視し、ファイル変更やコマンド実行が現れた時点でプロセスを止め、対象のパスをエラーとログに出します（書き込み自体は防げません）。出どころの分からない文書の変換には、Claude か Copilot を使ってください。
+- テレメトリ・自動更新は止めています（Claude: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` ほか、Codex: `analytics.enabled=false`・更新確認なし、Copilot: `COPILOT_AUTO_UPDATE=false`・クライアントテレメトリ無効）。CLI 本体の認証・LLM 呼び出しに伴う通信は各 CLI の仕様に従います。
+- ログ（`%LOCALAPPDATA%\dev.kakiwake-ai.app\logs\`）には文書の本文を書きません。
 
 ## 開発
 

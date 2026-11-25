@@ -453,6 +453,38 @@ fn apply_env(cmd: &mut Command, provider: Provider) {
     cmd.env("NO_COLOR", "1");
 }
 
+/// Codex で無効にする機能。変換にはどれも不要。
+/// - shell_tool / unified_exec: シェルの実行（read-only でも任意のファイルを読める）
+/// - apply_patch_freeform: 自由形式のファイル編集
+/// - view_image: ローカル画像の読み込み
+/// - apps / plugins / tool_suggest: ChatGPT 連携アプリ（サイト公開・共有設定の変更・Web 検索など）
+/// - standalone_web_search: Web 検索
+/// - multi_agent / multi_agent_v2 / enable_fanout: サブエージェント
+/// - その他: 画像生成、メモリ、目標管理、権限要求、コード実行モード
+const CODEX_DISABLED_FEATURES: &[&str] = &[
+    "shell_tool",
+    "unified_exec",
+    "apply_patch_freeform",
+    "view_image",
+    "apps",
+    "plugins",
+    "tool_suggest",
+    "standalone_web_search",
+    "multi_agent",
+    "multi_agent_v2",
+    "enable_fanout",
+    "image_generation",
+    "memories",
+    "goals",
+    "request_permissions_tool",
+    "code_mode",
+];
+
+/// Codex の JSON イベントのうち、ツールの実行を表す item の種類。
+/// これが出たら変換としては異常なので、プロセスを止めて利用者に知らせる。
+const CODEX_TOOL_ITEMS: &[&str] =
+    &["command_execution", "file_change", "mcp_tool_call", "web_search", "collab_tool_call", "image_generation"];
+
 /// 実行する引数を組み立てる（テストと表示用に分離）。
 pub fn build_args(provider: Provider, cfg: &ProviderConfig, last_message_file: &Path, help: &str) -> Vec<String> {
     let model = if cfg.model.trim().is_empty() { provider.default_model() } else { cfg.model.trim() };
@@ -497,9 +529,17 @@ pub fn build_args(provider: Provider, cfg: &ProviderConfig, last_message_file: &
                 ]
                 .map(String::from),
             );
+            // ツールを止める。read-only サンドボックスでもシェルは任意のファイルを読め、apply_patch は
+            // 作業ディレクトリ外にも書けた（codex 0.162 で確認）。止められる機能はすべて止める。
+            // 未知のキーは Codex が警告して無視するだけなので、版が変わっても起動は妨げない。
+            for feature in CODEX_DISABLED_FEATURES {
+                a.extend(["-c".into(), format!("features.{feature}=false")]);
+            }
             if !effort.is_empty() {
                 a.extend(["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]);
             }
+            // ツール実行を検知するためにイベントを JSON Lines で受け取る（最終結果は -o のファイル）
+            a.push("--json".into());
             a.push("-o".into());
             a.push(last_message_file.to_string_lossy().into_owned());
             // プロンプト引数を省略すると stdin 全体が指示として読まれる
@@ -507,10 +547,17 @@ pub fn build_args(provider: Provider, cfg: &ProviderConfig, last_message_file: &
         }
         Provider::Copilot => {
             // copilot は -p の文字列しかプロンプトにしないため、-p を付けず stdin 全体をプロンプトにする
+            // --available-tools= （空）は「制限なし」と解釈され bash が動いた。存在しない名前を指定して
+            // モデルに見えるツールを 0 にし、さらに拒否ルールで全種類を禁止する（拒否は許可より優先）。
             a.extend(
-                ["-s", "--model", model, "--no-auto-update", "--no-custom-instructions", "--available-tools="]
+                ["-s", "--model", model, "--no-auto-update", "--no-custom-instructions", "--available-tools=none"]
                     .map(String::from),
             );
+            if help.contains("--deny-tool") {
+                for kind in ["shell", "write", "read", "memory", "url"] {
+                    a.push(format!("--deny-tool={kind}"));
+                }
+            }
             // バージョンによって無いフラグは --help で確認できたものだけ付ける
             for flag in ["--disable-builtin-mcps", "--no-ask-user", "--disallow-temp-dir", "--disable-client-telemetry"]
             {
@@ -594,6 +641,8 @@ struct Collected {
     raw: String,
     /// CLI が自分で報告したエラー（Claude の is_error など）
     error: Option<String>,
+    /// 危険な動作を検知したので、CLI の終了を待たずに止める
+    abort: bool,
 }
 
 pub async fn run(
@@ -633,6 +682,9 @@ pub async fn run(
 
     let work_fut = async {
         let collected = collect_stdout(provider, stdout_pipe, on_text).await?;
+        if collected.abort {
+            let _ = child.start_kill();
+        }
         let status = child.wait().await?;
         Ok::<_, std::io::Error>((collected, status))
     };
@@ -738,14 +790,46 @@ async fn collect_stdout(
             c.raw = c.text.clone();
         }
         Provider::Codex => {
-            // codex exec は途中経過を出さない。最終テキストは -o のファイルから読む
-            let mut buf = Vec::new();
-            pipe.read_to_end(&mut buf).await?;
-            c.raw = String::from_utf8_lossy(&buf).into_owned();
-            c.text = c.raw.clone();
+            // codex exec は途中経過のテキストを出さない。最終テキストは -o のファイルから読む。
+            // イベントを監視し、ツールの実行が出たら即座に打ち切る。
+            let mut lines = BufReader::new(pipe).lines();
+            while let Some(line) = lines.next_line().await? {
+                c.raw.push_str(&line);
+                c.raw.push('\n');
+                if let Some(desc) = codex_tool_use(&line) {
+                    c.error = Some(format!(
+                        "Codex がツールを使おうとしたため中止しました（{desc}）。文書に指示文が紛れていないか確認してください。"
+                    ));
+                    c.abort = true;
+                    break;
+                }
+            }
         }
     }
     Ok(c)
+}
+
+/// Codex の JSON イベント 1 行がツールの実行なら、その説明を返す。
+fn codex_tool_use(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if !v["type"].as_str()?.starts_with("item.") {
+        return None;
+    }
+    let item = &v["item"];
+    let kind = item["type"].as_str()?;
+    if !CODEX_TOOL_ITEMS.contains(&kind) {
+        return None;
+    }
+    let detail = match kind {
+        "command_execution" => item["command"].as_str().unwrap_or_default().to_string(),
+        "file_change" => item["changes"]
+            .as_array()
+            .map(|cs| cs.iter().filter_map(|c| c["path"].as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default(),
+        _ => item["tool"].as_str().or(item["query"].as_str()).unwrap_or_default().to_string(),
+    };
+    let detail: String = detail.chars().take(200).collect();
+    Some(if detail.is_empty() { kind.to_string() } else { format!("{kind}: {detail}") })
 }
 
 #[derive(Debug, PartialEq)]
@@ -808,6 +892,18 @@ mod tests {
     }
 
     #[test]
+    fn detects_codex_tool_use() {
+        let patch = r#"{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/home/u/.bashrc","kind":"add"}],"status":"completed"}}"#;
+        assert_eq!(codex_tool_use(patch).as_deref(), Some("file_change: /home/u/.bashrc"));
+        let cmd = r#"{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"bash -lc 'cat ~/.ssh/id_rsa'"}}"#;
+        assert_eq!(codex_tool_use(cmd).as_deref(), Some("command_execution: bash -lc 'cat ~/.ssh/id_rsa'"));
+        let msg = r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"h1. T"}}"#;
+        assert_eq!(codex_tool_use(msg), None);
+        assert_eq!(codex_tool_use(r#"{"type":"turn.completed"}"#), None);
+        assert_eq!(codex_tool_use("not json"), None);
+    }
+
+    #[test]
     fn parses_claude_stream() {
         let d = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"h1. T"}}}"#;
         assert_eq!(parse_claude_line(d), Some(ClaudeEvent::Delta("h1. T".into())));
@@ -855,10 +951,20 @@ mod tests {
         let x = build_args(Provider::Codex, &ProviderConfig::for_provider(Provider::Codex), f, "");
         assert!(x.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"));
         assert_eq!(x.last().unwrap(), "-");
-        let g = build_args(Provider::Copilot, &ProviderConfig::for_provider(Provider::Copilot), f, "--no-ask-user");
+        assert!(x.contains(&"features.shell_tool=false".to_string()));
+        assert!(x.contains(&"features.apps=false".to_string()));
+        assert!(x.contains(&"--json".to_string()));
+        let g = build_args(
+            Provider::Copilot,
+            &ProviderConfig::for_provider(Provider::Copilot),
+            f,
+            "--no-ask-user --deny-tool[=tools...]",
+        );
         assert!(g.contains(&"--no-ask-user".to_string()));
+        assert!(g.contains(&"--available-tools=none".to_string()));
+        assert!(g.contains(&"--deny-tool=shell".to_string()));
+        assert!(g.contains(&"--deny-tool=url".to_string()));
         assert!(!g.contains(&"--disable-client-telemetry".to_string()));
-        assert!(g.contains(&"--available-tools=".to_string()));
         assert!(!g.contains(&"-p".to_string()));
     }
 }
