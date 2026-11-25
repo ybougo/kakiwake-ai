@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "メインウィンドウの権限。プラグインは使わず、アプリ独自コマンドのみ許可する。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
