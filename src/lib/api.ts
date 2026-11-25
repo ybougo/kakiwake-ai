@@ -111,6 +111,9 @@ export const api = {
     return invoke<ConvertResponse>("convert", { req, onStream });
   },
   cancel: (jobId: number) => invoke<boolean>("cancel", { jobId }),
+  /** 画面側のエラーをローカルのログファイルに残す（失敗しても無視）。 */
+  logError: (context: string, message: string) =>
+    invoke<void>("log_client_error", { context, message }).catch(() => {}),
 };
 
 export function errorText(e: unknown): string {

@@ -1,9 +1,11 @@
+mod log;
+
 use kakiwake_core::{Conversion, ConvertOptions, Format, Provider, ProviderConfig, detect, provider, quality};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tokio::sync::oneshot;
@@ -64,12 +66,22 @@ fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 fn load_settings(app: &tauri::AppHandle) -> Settings {
-    settings_path(app)
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
-        .unwrap_or_default()
-        .normalized()
+    let Ok(path) = settings_path(app) else { return Settings::default().normalized() };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Settings::default().normalized(),
+        Err(e) => {
+            log::write(app, &format!("settings: 読み込み失敗（既定値を使用）: {e}"));
+            return Settings::default().normalized();
+        }
+    };
+    match serde_json::from_str::<Settings>(&text) {
+        Ok(s) => s.normalized(),
+        Err(e) => {
+            log::write(app, &format!("settings: 解析失敗（既定値を使用）: {e} / {} bytes", text.len()));
+            Settings::default().normalized()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +142,13 @@ fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<Settings, 
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    // 変換処理が同時に読んでも壊れた内容を見ないよう、一時ファイルに書いてから置き換える
+    let tmp = path.with_extension("json.tmp");
+    let result = std::fs::write(&tmp, json).and_then(|_| std::fs::rename(&tmp, &path));
+    if let Err(e) = result {
+        log::write(&app, &format!("settings: 保存失敗: {e}"));
+        return Err(e.to_string());
+    }
     Ok(settings)
 }
 
@@ -174,7 +192,22 @@ async fn check_providers(app: tauri::AppHandle) -> Vec<ProviderStatus> {
     });
     let [a, b, c] = checks;
     let (a, b, c) = tokio::join!(a, b, c);
-    vec![a, b, c]
+    let result = vec![a, b, c];
+    for st in &result {
+        log::write(
+            &app,
+            &format!(
+                "check: {} ok={} version={} path={} auth={} error={}",
+                st.id.id(),
+                st.ok,
+                st.version.as_deref().unwrap_or("-"),
+                st.path.as_deref().unwrap_or("-"),
+                st.auth.as_ref().map(|a| format!("{a:?}")).unwrap_or_else(|| "-".into()),
+                st.error.as_deref().unwrap_or("-"),
+            ),
+        );
+    }
+    result
 }
 
 /// ログイン用のターミナルを開く（ログインはブラウザ／デバイスコード認証のため CLI 自身に任せる）。
@@ -262,6 +295,21 @@ async fn convert(
         quality_check: settings.quality_check || settings.retry_on_ng,
     };
 
+    log::write(
+        &app,
+        &format!(
+            "convert#{} start: {} model={} effort={} from={}{} to={} chars={}",
+            req.job_id,
+            req.provider.id(),
+            cfg.model,
+            if cfg.effort.is_empty() { "-" } else { &cfg.effort },
+            from,
+            if detected_from { "(auto)" } else { "" },
+            req.to,
+            req.source.chars().count()
+        ),
+    );
+    let started = Instant::now();
     let mut retried = false;
     let mut attempt = 0;
     let conversion = loop {
@@ -275,7 +323,16 @@ async fn convert(
         };
         let r = kakiwake_core::convert(&req.source, from, req.to, &opts, Some(rx), Some(&send)).await;
         jobs.0.lock().unwrap().remove(&req.job_id);
-        let c = r.map_err(|e| e.to_string())?;
+        let c = match r {
+            Ok(c) => c,
+            Err(e) => {
+                log::write(
+                    &app,
+                    &format!("convert#{} error after {}ms: {e}", req.job_id, started.elapsed().as_millis()),
+                );
+                return Err(e.to_string());
+            }
+        };
         let is_ng = c.quality.as_ref().is_some_and(|q| q.grade == quality::Grade::Ng);
         if settings.retry_on_ng && is_ng && attempt == 0 {
             attempt += 1;
@@ -285,6 +342,16 @@ async fn convert(
         break c;
     };
     let mut conversion = conversion;
+    log::write(
+        &app,
+        &format!(
+            "convert#{} done in {}ms: grade={} out_chars={} retried={retried}",
+            req.job_id,
+            started.elapsed().as_millis(),
+            conversion.quality.as_ref().map(|q| format!("{:?}({})", q.grade, q.score)).unwrap_or_else(|| "-".into()),
+            conversion.output.chars().count(),
+        ),
+    );
     if !settings.quality_check {
         conversion.quality = None;
     }
@@ -292,13 +359,26 @@ async fn convert(
 }
 
 #[tauri::command]
-fn cancel(jobs: State<'_, Jobs>, job_id: u64) -> bool {
+fn cancel(app: tauri::AppHandle, jobs: State<'_, Jobs>, job_id: u64) -> bool {
+    log::write(&app, &format!("convert#{job_id} cancel"));
     jobs.0.lock().unwrap().remove(&job_id).is_some_and(|tx| tx.send(()).is_ok())
+}
+
+/// 画面側で起きたエラー（コマンド呼び出しの失敗など）をログに残す。
+#[tauri::command]
+fn log_client_error(app: tauri::AppHandle, context: String, message: String) {
+    let context: String = context.chars().take(60).collect();
+    let message: String = message.chars().take(2000).collect();
+    log::write(&app, &format!("ui[{context}]: {message}"));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            log::write(app.handle(), &format!("app start: v{}", app.package_info().version));
+            Ok(())
+        })
         .manage(Jobs::default())
         .invoke_handler(tauri::generate_handler![
             provider_catalog,
@@ -307,7 +387,8 @@ pub fn run() {
             check_providers,
             open_login,
             convert,
-            cancel
+            cancel,
+            log_client_error
         ])
         .run(tauri::generate_context!())
         .expect("error while running kakiwake-ai");

@@ -29,6 +29,12 @@
   let running = $state(false);
   let jobId = 0;
   let error = $state("");
+
+  /** エラーを画面に出し、ローカルのログにも残す（変換のエラーはバックエンド側で記録済み）。 */
+  function fail(context: string, e: unknown, log = true) {
+    error = errorText(e);
+    if (log) api.logError(context, error);
+  }
   let showSettings = $state(false);
   let copied = $state(false);
 
@@ -50,7 +56,7 @@
       from = settings.last_from ?? "auto";
       statuses = await api.checkProviders();
     } catch (e) {
-      error = errorText(e);
+      fail("startup", e);
     }
   });
 
@@ -60,7 +66,7 @@
     try {
       settings = await api.saveSettings($state.snapshot(settings) as Settings);
     } catch (e) {
-      error = errorText(e);
+      fail("persist", e);
     }
   }
 
@@ -115,7 +121,7 @@
       quality = r.quality;
       usedFrom = { format: r.from, detected: r.detected_from };
     } catch (e) {
-      if (id === jobId) error = errorText(e);
+      if (id === jobId) fail("convert", e, false);
     } finally {
       if (id === jobId) running = false;
     }
@@ -142,7 +148,7 @@
       copied = true;
       setTimeout(() => (copied = false), 1200);
     } catch (e) {
-      error = errorText(e);
+      fail("copy", e);
     }
   }
 
@@ -150,7 +156,7 @@
     try {
       await api.openLogin(provider);
     } catch (e) {
-      error = errorText(e);
+      fail("login", e);
     }
   }
 
@@ -271,7 +277,7 @@
         showSettings = false;
         statuses = await api.checkProviders();
       } catch (e) {
-        error = errorText(e);
+        fail("settings", e);
       }
     }}
   />

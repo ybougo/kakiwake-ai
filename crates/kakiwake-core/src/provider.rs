@@ -550,13 +550,29 @@ fn display_command(exe: &Path, args: &[String]) -> String {
 /// 一時作業ディレクトリ。CLI がファイルを読んでも何もない場所にする。
 struct WorkDir(PathBuf);
 
+/// 同じプロセス内で作る一時ディレクトリの通し番号。
+static WORK_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl WorkDir {
     fn new() -> std::io::Result<Self> {
+        Self::new_in(&std::env::temp_dir())
+    }
+
+    /// 並行して作っても名前が重ならないようにする。
+    /// （Windows の時計は粗く、時刻だけだと同じ名前になり、片方の削除でもう片方が消えていた）
+    fn new_in(base: &Path) -> std::io::Result<Self> {
         let nanos =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("kakiwake-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        Ok(Self(dir))
+        loop {
+            let seq = WORK_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = base.join(format!("kakiwake-{}-{nanos}-{seq}", std::process::id()));
+            // create_dir は既にあると失敗するので、他と共有することがない
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -768,6 +784,28 @@ fn tail(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_dirs_created_concurrently_are_distinct() {
+        let base = std::env::temp_dir().join(format!("kakiwake-test-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let mut dirs: Vec<WorkDir> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16).map(|_| s.spawn(|| WorkDir::new_in(&base).unwrap())).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut paths: Vec<_> = dirs.iter().map(|d| d.0.clone()).collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 16);
+        // 1 つ消しても、他の一時ディレクトリは残る
+        let first = dirs.remove(0);
+        let first_path = first.0.clone();
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(dirs.iter().all(|d| d.0.exists()));
+        drop(dirs);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn parses_claude_stream() {
