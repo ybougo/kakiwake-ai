@@ -134,6 +134,10 @@ pub enum RunError {
     Cancelled,
     #[error("{provider} がエラー終了しました（code {code:?}）: {stderr}")]
     Failed { provider: String, code: Option<i32>, stderr: String },
+    #[error(
+        "Claude Code の安全フィルターが変換を拒否しました。変換先の「追加指示」に推論過程の出力を求める指示があれば外してください。文書変換だけでも再現する場合は、下の Request ID を Anthropic サポートに伝えてください。\n\n{detail}"
+    )]
+    ClaudeReasoningRefusal { detail: String },
     #[error("{provider} がツールを使おうとしたため中止しました（{kind}{}）。文書に指示文が紛れていないか確認してください。", if .target.is_empty() { String::new() } else { format!(": {}", .target) })]
     ToolUse { provider: String, kind: String, target: String },
     #[error("{provider} にログインしていません。{hint}\n{detail}")]
@@ -154,6 +158,7 @@ impl RunError {
             RunError::Timeout(s) => format!("timeout: {s}s"),
             RunError::Cancelled => "cancelled".into(),
             RunError::Failed { code, stderr, .. } => format!("failed: code={code:?} detail_chars={}", chars(stderr)),
+            RunError::ClaudeReasoningRefusal { .. } => "refusal: reasoning_extraction".into(),
             RunError::ToolUse { kind, target, .. } => {
                 // ファイル変更は書き換えられたパスが分からないと確認できないので残す
                 if kind == "file_change" { format!("tool_use: {kind}: {target}") } else { format!("tool_use: {kind}") }
@@ -767,6 +772,12 @@ pub async fn run(
             .clone()
             .or_else(|| (!stderr.trim().is_empty()).then(|| stderr.clone()))
             .unwrap_or_else(|| collected.raw.clone());
+        if provider == Provider::Claude
+            && detail.contains("safeguards flagged this message")
+            && detail.contains("[reasoning_extraction]")
+        {
+            return Err(RunError::ClaudeReasoningRefusal { detail: tail(&detail, 1200) });
+        }
         if looks_like_auth_error(&detail) {
             return Err(RunError::Auth {
                 provider: provider.label().into(),
@@ -997,6 +1008,29 @@ mod tests {
         assert!(matches!(r, Err(RunError::Cancelled)), "{r:?}");
         assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_reasoning_refusal_keeps_request_id_out_of_log() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = WorkDir::new().unwrap();
+        let path = dir.0.join("claude");
+        let detail = "API Error: Sonnet 5.5's safeguards flagged this message\n\n\
+            Details: `[reasoning_extraction]`\n\nRequest ID: req_test401";
+        let result = serde_json::json!({ "type": "result", "is_error": true, "result": detail });
+        std::fs::write(&path, format!("#!/bin/sh\ncat >/dev/null\ncat <<'EOF'\n{result}\nEOF\nexit 1\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = ProviderConfig {
+            path: path.to_string_lossy().into_owned(),
+            ..ProviderConfig::for_provider(Provider::Claude)
+        };
+        let prompt = crate::prompt::build("# Sample", crate::Format::Md, crate::Format::Md, None);
+        let error = run(Provider::Claude, &cfg, &prompt, Duration::from_secs(5), None, None).await.unwrap_err();
+        assert!(matches!(&error, RunError::ClaudeReasoningRefusal { .. }), "{error:?}");
+        assert!(error.to_string().contains("Request ID: req_test401"));
+        assert_eq!(error.log_summary(), "refusal: reasoning_extraction");
     }
 
     #[test]

@@ -326,6 +326,9 @@ async fn convert(
         let c = match r {
             Ok(c) => c,
             Err(e) => {
+                if matches!(&e, provider::RunError::ClaudeReasoningRefusal { .. }) {
+                    let _ = on_stream.send(StreamMsg::Reset);
+                }
                 // ログには本文が混ざらない要約だけを書く（全文は画面にだけ出す）
                 log::write(
                     &app,

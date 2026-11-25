@@ -26,6 +26,7 @@
   /** 実際に使った変換元（自動判定の結果を含む）。品質バッジのツールチップに出す */
   let usedFrom = $state<{ format: Format; detected: boolean } | null>(null);
 
+  let starting = $state(true);
   let running = $state(false);
   let jobId = 0;
   let error = $state("");
@@ -42,6 +43,9 @@
   const info = $derived(catalog.find((c) => c.id === provider));
   const status = $derived(statuses.find((s) => s.id === provider));
   const model = $derived(settings?.providers[provider]?.model ?? info?.default_model ?? "");
+  const canConvert = $derived(
+    !starting && !running && settings !== null && source.trim() !== "" && status?.ok !== false,
+  );
   const qualityTitle = $derived.by(() => {
     if (!quality) return "";
     const label = FORMATS.find((f) => f.id === usedFrom?.format)?.label ?? "";
@@ -57,6 +61,8 @@
       await refreshStatuses(true);
     } catch (e) {
       fail("startup", e);
+    } finally {
+      starting = false;
     }
   });
 
@@ -86,7 +92,7 @@
   }
 
   async function convert() {
-    if (running || !source.trim() || !settings) return;
+    if (!canConvert) return;
     error = "";
     running = true;
     const id = ++jobId;
@@ -156,7 +162,7 @@
   let lastStatusCheck = 0;
   let checkingStatus = false;
   async function refreshStatuses(force = false) {
-    if (checkingStatus || running) return;
+    if (!settings || checkingStatus || running) return;
     if (!force && Date.now() - lastStatusCheck < 5000) return;
     checkingStatus = true;
     lastStatusCheck = Date.now();
@@ -240,8 +246,8 @@
           <span class="spinner" aria-hidden="true"></span>中止
         </button>
       {:else}
-        <button class="primary" onclick={convert} disabled={!source.trim() || status?.ok === false} title="Ctrl+Enter">
-          変換 →
+        <button class="primary" onclick={convert} disabled={!canConvert} title="Ctrl+Enter">
+          {starting ? "起動準備中…" : "変換 →"}
         </button>
       {/if}
     </div>

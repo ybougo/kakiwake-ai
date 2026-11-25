@@ -38,7 +38,7 @@ pub fn build(src: &str, from: Format, to: Format, extra_instructions: Option<&st
             from.prompt_name(),
             to.prompt_name()
         ),
-        "Output ONLY the converted document. No preface, no explanation, no notes, no self-corrections, no comments about the conversion, and do not wrap the whole output in a code fence. Think silently; the first character you write must be the first character of the converted document.".into(),
+        "Output ONLY the converted document. No preface, no explanation, no notes, no self-corrections, no comments about the conversion, and do not wrap the whole output in a code fence. The first character you write must be the first character of the converted document.".into(),
         "Keep every piece of content: all words, numbers, dates, names, URLs and their order. Do not add, remove, summarize, reword, translate or fix anything. Keep the original language.".into(),
         "Preserve the visual structure using the target syntax: heading levels, nested bullet and numbered lists, tables, bold/italic/strike, inline code, code blocks (contents unchanged, byte for byte), quotes, links and blank-line paragraph breaks.".into(),
         "If the target has no equivalent for an element, follow the target rules below; otherwise keep the text as plain text.".into(),
