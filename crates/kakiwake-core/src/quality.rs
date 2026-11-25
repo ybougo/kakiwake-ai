@@ -76,7 +76,11 @@ pub fn check(source: &str, from: Format, output: &str, to: Format) -> QualityRep
     let missing_urls = missing_urls(source, output);
     let missing_numbers = missing_numbers(&src_doc.text, &out_doc.text);
     let structure = compare_structure(source, from, output, to);
-    let syntax_issues = lint(output, to);
+    let mut syntax_issues = lint(output, to);
+    if source.contains("KAKIWAKE_INPUT") {
+        // 元の文書にもともと含まれる文字列なら、区切りタグの残りではない
+        syntax_issues.retain(|i| !i.message.contains("区切りタグ"));
+    }
 
     let precision_floor = 0.85;
     let mut messages = Vec::new();

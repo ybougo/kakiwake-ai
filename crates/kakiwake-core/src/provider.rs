@@ -134,12 +134,35 @@ pub enum RunError {
     Cancelled,
     #[error("{provider} がエラー終了しました（code {code:?}）: {stderr}")]
     Failed { provider: String, code: Option<i32>, stderr: String },
+    #[error("{provider} がツールを使おうとしたため中止しました（{kind}{}）。文書に指示文が紛れていないか確認してください。", if .target.is_empty() { String::new() } else { format!(": {}", .target) })]
+    ToolUse { provider: String, kind: String, target: String },
     #[error("{provider} にログインしていません。{hint}\n{detail}")]
     Auth { provider: String, hint: String, detail: String },
     #[error("{0} の出力が空でした。ログイン状態やモデル名を確認してください。{1}")]
     Empty(String, String),
     #[error("入出力エラー: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl RunError {
+    /// ログ用の要約。CLI の出力やエラー本文には文書の内容が含まれ得るので、種類と長さだけにする。
+    pub fn log_summary(&self) -> String {
+        let chars = |s: &str| s.chars().count();
+        match self {
+            RunError::NotFound(p) => format!("not_found: {p}"),
+            RunError::Spawn(p, e) => format!("spawn_failed: {p}: {e}"),
+            RunError::Timeout(s) => format!("timeout: {s}s"),
+            RunError::Cancelled => "cancelled".into(),
+            RunError::Failed { code, stderr, .. } => format!("failed: code={code:?} detail_chars={}", chars(stderr)),
+            RunError::ToolUse { kind, target, .. } => {
+                // ファイル変更は書き換えられたパスが分からないと確認できないので残す
+                if kind == "file_change" { format!("tool_use: {kind}: {target}") } else { format!("tool_use: {kind}") }
+            }
+            RunError::Auth { detail, .. } => format!("auth: detail_chars={}", chars(detail)),
+            RunError::Empty(_, stderr) => format!("empty_output: stderr_chars={}", chars(stderr)),
+            RunError::Io(e) => format!("io: {}", e.kind()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -629,6 +652,9 @@ impl Drop for WorkDir {
     }
 }
 
+/// 子プロセスの終了後、パイプの後始末を待つ上限。
+const PIPE_GRACE: Duration = Duration::from_secs(3);
+
 /// 生成途中のテキストを受け取るコールバック。
 pub type OnText<'a> = &'a (dyn Fn(&str) + Send + Sync);
 
@@ -643,6 +669,8 @@ struct Collected {
     error: Option<String>,
     /// 危険な動作を検知したので、CLI の終了を待たずに止める
     abort: bool,
+    /// 検知したツールの使用（種類, 対象）
+    tool_use: Option<(String, String)>,
 }
 
 pub async fn run(
@@ -668,37 +696,70 @@ pub async fn run(
     let mut child = cmd.spawn().map_err(|e| RunError::Spawn(provider.program().into(), e))?;
     let payload = stdin_payload(prompt);
     let mut stdin = child.stdin.take().expect("stdin piped");
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         let _ = stdin.write_all(payload.as_bytes()).await;
         let _ = stdin.shutdown().await;
     });
     let mut stderr_pipe = child.stderr.take().expect("stderr piped");
-    let stderr_task = tokio::spawn(async move {
+    let mut stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         let _ = stderr_pipe.read_to_end(&mut buf).await;
         String::from_utf8_lossy(&buf).into_owned()
     });
     let stdout_pipe = child.stdout.take().expect("stdout piped");
 
-    let work_fut = async {
-        let collected = collect_stdout(provider, stdout_pipe, on_text).await?;
-        if collected.abort {
-            let _ = child.start_kill();
+    enum Outcome {
+        Done(std::io::Result<(Collected, std::process::ExitStatus)>),
+        TimedOut,
+        Cancelled,
+    }
+    let outcome = {
+        let work_fut = async {
+            let collected = collect_stdout(provider, stdout_pipe, on_text).await?;
+            if collected.abort {
+                let _ = child.start_kill();
+            }
+            let status = child.wait().await?;
+            Ok::<_, std::io::Error>((collected, status))
+        };
+        match cancel {
+            Some(rx) => tokio::select! {
+                r = tokio::time::timeout(timeout, work_fut) => r.map_or(Outcome::TimedOut, Outcome::Done),
+                _ = rx => Outcome::Cancelled,
+            },
+            None => tokio::time::timeout(timeout, work_fut).await.map_or(Outcome::TimedOut, Outcome::Done),
         }
-        let status = child.wait().await?;
-        Ok::<_, std::io::Error>((collected, status))
     };
-    let result = match cancel {
-        Some(rx) => tokio::select! {
-            r = tokio::time::timeout(timeout, work_fut) => r,
-            _ = rx => return Err(RunError::Cancelled),
-        },
-        None => tokio::time::timeout(timeout, work_fut).await,
+    let (collected, status) = match outcome {
+        Outcome::Done(r) => r?,
+        Outcome::TimedOut | Outcome::Cancelled => {
+            // 子プロセスを止めてから戻る（止めないと stdin の書き込みや stderr の読み込みが終わらない）
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(PIPE_GRACE, child.wait()).await;
+            writer.abort();
+            stderr_task.abort();
+            return Err(if matches!(outcome, Outcome::Cancelled) {
+                RunError::Cancelled
+            } else {
+                RunError::Timeout(timeout.as_secs())
+            });
+        }
     };
-    let _ = writer.await;
-    let (collected, status) = result.map_err(|_| RunError::Timeout(timeout.as_secs()))??;
-    let stderr = stderr_task.await.unwrap_or_default();
+    // 子プロセスは終了済み。孫プロセスがパイプを握っていても待ち続けないよう上限を設ける
+    if tokio::time::timeout(PIPE_GRACE, &mut writer).await.is_err() {
+        writer.abort();
+    }
+    let stderr = match tokio::time::timeout(PIPE_GRACE, &mut stderr_task).await {
+        Ok(r) => r.unwrap_or_default(),
+        Err(_) => {
+            stderr_task.abort();
+            String::new()
+        }
+    };
 
+    if let Some((kind, target)) = collected.tool_use {
+        return Err(RunError::ToolUse { provider: provider.label().into(), kind, target });
+    }
     let failed = !status.success() || collected.error.is_some();
     if failed || (collected.text.trim().is_empty() && looks_like_auth_error(&stderr)) {
         let detail = collected
@@ -796,10 +857,8 @@ async fn collect_stdout(
             while let Some(line) = lines.next_line().await? {
                 c.raw.push_str(&line);
                 c.raw.push('\n');
-                if let Some(desc) = codex_tool_use(&line) {
-                    c.error = Some(format!(
-                        "Codex がツールを使おうとしたため中止しました（{desc}）。文書に指示文が紛れていないか確認してください。"
-                    ));
+                if let Some(found) = codex_tool_use(&line) {
+                    c.tool_use = Some(found);
                     c.abort = true;
                     break;
                 }
@@ -809,8 +868,8 @@ async fn collect_stdout(
     Ok(c)
 }
 
-/// Codex の JSON イベント 1 行がツールの実行なら、その説明を返す。
-fn codex_tool_use(line: &str) -> Option<String> {
+/// Codex の JSON イベント 1 行がツールの実行なら、（種類, 対象）を返す。
+fn codex_tool_use(line: &str) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     if !v["type"].as_str()?.starts_with("item.") {
         return None;
@@ -829,7 +888,7 @@ fn codex_tool_use(line: &str) -> Option<String> {
         _ => item["tool"].as_str().or(item["query"].as_str()).unwrap_or_default().to_string(),
     };
     let detail: String = detail.chars().take(200).collect();
-    Some(if detail.is_empty() { kind.to_string() } else { format!("{kind}: {detail}") })
+    Some((kind.to_string(), detail))
 }
 
 #[derive(Debug, PartialEq)]
@@ -891,12 +950,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// stdin を読まずに居座る偽の CLI。
+    #[cfg(unix)]
+    fn stuck_cli() -> (PathBuf, ProviderConfig) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("kakiwake-stuck-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stuck-cli");
+        std::fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = ProviderConfig {
+            path: path.to_string_lossy().into_owned(),
+            ..ProviderConfig::for_provider(Provider::Claude)
+        };
+        (dir, cfg)
+    }
+
+    /// パイプの容量（64 KiB）を超える本文
+    #[cfg(unix)]
+    fn big_prompt() -> Prompt {
+        Prompt { system: "S".into(), user: "あ".repeat(200_000), tag: "T".into() }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_returns_even_if_cli_never_reads_stdin() {
+        let (dir, cfg) = stuck_cli();
+        let started = Instant::now();
+        let r = run(Provider::Claude, &cfg, &big_prompt(), Duration::from_millis(500), None, None).await;
+        assert!(matches!(r, Err(RunError::Timeout(_))), "{r:?}");
+        assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_returns_even_if_cli_never_reads_stdin() {
+        let (dir, cfg) = stuck_cli();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = tx.send(());
+        });
+        let started = Instant::now();
+        let r = run(Provider::Claude, &cfg, &big_prompt(), Duration::from_secs(60), Some(rx), None).await;
+        assert!(matches!(r, Err(RunError::Cancelled)), "{r:?}");
+        assert!(started.elapsed() < Duration::from_secs(8), "{:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn log_summary_never_contains_cli_output() {
+        let secret = "社外秘の本文";
+        let errs = [
+            RunError::Failed { provider: "Copilot".into(), code: Some(1), stderr: format!("…{secret}") },
+            RunError::Auth { provider: "Claude".into(), hint: "h".into(), detail: secret.into() },
+            RunError::Empty("Codex".into(), secret.into()),
+            RunError::ToolUse { provider: "Codex".into(), kind: "command_execution".into(), target: secret.into() },
+        ];
+        for e in &errs {
+            assert!(!e.log_summary().contains(secret), "{}", e.log_summary());
+            assert!(e.to_string().contains(secret) || matches!(e, RunError::ToolUse { .. }));
+        }
+        let patch =
+            RunError::ToolUse { provider: "Codex".into(), kind: "file_change".into(), target: "/x/.bashrc".into() };
+        assert_eq!(patch.log_summary(), "tool_use: file_change: /x/.bashrc");
+    }
+
     #[test]
     fn detects_codex_tool_use() {
         let patch = r#"{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/home/u/.bashrc","kind":"add"}],"status":"completed"}}"#;
-        assert_eq!(codex_tool_use(patch).as_deref(), Some("file_change: /home/u/.bashrc"));
+        assert_eq!(codex_tool_use(patch), Some(("file_change".into(), "/home/u/.bashrc".into())));
         let cmd = r#"{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"bash -lc 'cat ~/.ssh/id_rsa'"}}"#;
-        assert_eq!(codex_tool_use(cmd).as_deref(), Some("command_execution: bash -lc 'cat ~/.ssh/id_rsa'"));
+        assert_eq!(codex_tool_use(cmd), Some(("command_execution".into(), "bash -lc 'cat ~/.ssh/id_rsa'".into())));
         let msg = r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"h1. T"}}"#;
         assert_eq!(codex_tool_use(msg), None);
         assert_eq!(codex_tool_use(r#"{"type":"turn.completed"}"#), None);

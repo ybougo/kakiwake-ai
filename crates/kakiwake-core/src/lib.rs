@@ -43,7 +43,7 @@ pub async fn convert(
 ) -> Result<Conversion, provider::RunError> {
     let prompt = prompt::build(src, from, to, opts.extra_instructions);
     let out = provider::run(opts.provider, opts.config, &prompt, opts.timeout, cancel, on_text).await?;
-    let output = postprocess::clean(&out.text, src);
+    let output = postprocess::clean(&out.text, src, &prompt.tag);
     let quality = opts.quality_check.then(|| quality::check(src, from, &output, to));
     Ok(Conversion { from, to, output, raw_output: out.text, elapsed_ms: out.elapsed_ms, command: out.command, quality })
 }

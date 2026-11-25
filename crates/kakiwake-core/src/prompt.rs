@@ -6,6 +6,8 @@ use crate::format::Format;
 pub struct Prompt {
     pub system: String,
     pub user: String,
+    /// 本文を囲んだ区切りタグの名前（後処理で外側の囲みだけを外すのに使う）
+    pub tag: String,
 }
 
 impl Prompt {
@@ -76,7 +78,7 @@ pub fn build(src: &str, from: Format, to: Format, extra_instructions: Option<&st
     }
 
     let user = format!("<{tag}>\n{}\n</{tag}>", src.trim_end_matches(['\r', '\n']));
-    Prompt { system, user }
+    Prompt { system, user, tag }
 }
 
 #[cfg(test)]

@@ -326,9 +326,15 @@ async fn convert(
         let c = match r {
             Ok(c) => c,
             Err(e) => {
+                // ログには本文が混ざらない要約だけを書く（全文は画面にだけ出す）
                 log::write(
                     &app,
-                    &format!("convert#{} error after {}ms: {e}", req.job_id, started.elapsed().as_millis()),
+                    &format!(
+                        "convert#{} error after {}ms: {}",
+                        req.job_id,
+                        started.elapsed().as_millis(),
+                        e.log_summary()
+                    ),
                 );
                 return Err(e.to_string());
             }

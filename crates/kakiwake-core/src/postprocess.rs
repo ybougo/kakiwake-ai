@@ -8,16 +8,16 @@ static PREFACE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 static FENCE_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(```+|~~~+)[A-Za-z0-9_+.\-]*\s*$").unwrap());
-static TAG_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^</?KAKIWAKE_INPUT(_\d+)?>\s*$").unwrap());
 
 /// LLM の出力から変換結果以外の付随物を取り除く。
 /// `source` は「元から全体がコードブロックだった」等の誤除去を避けるために使う。
-pub fn clean(raw: &str, source: &str) -> String {
+pub fn clean(raw: &str, source: &str, tag: &str) -> String {
     let text = raw.replace("\r\n", "\n").replace('\r', "\n");
     let mut lines: Vec<&str> = text.lines().collect();
 
-    // 区切りタグのエコーを除去
-    lines.retain(|l| !TAG_LINE.is_match(l.trim()));
+    // 区切りタグのエコーを除去する。今回使ったタグが出力の先頭・末尾にあるときだけ外す
+    // （本文やコードブロック内の同じ文字列は元の文書の内容なので残す）
+    strip_outer_tag(&mut lines, tag);
     trim_blank(&mut lines);
 
     // 先頭の前置き文（「以下が変換結果です:」など）＋空行 を除去
@@ -66,11 +66,24 @@ pub fn clean(raw: &str, source: &str) -> String {
             }
         }
     }
-    trim_blank(&mut lines);
+    // 前置き文や全体を囲むフェンスの内側にタグがある場合
+    strip_outer_tag(&mut lines, tag);
 
     let mut out = lines.join("\n");
     out.push('\n');
     out
+}
+
+/// 今回使った区切りタグが先頭・末尾にあれば外す。
+fn strip_outer_tag(lines: &mut Vec<&str>, tag: &str) {
+    trim_blank(lines);
+    if lines.first().is_some_and(|l| l.trim() == format!("<{tag}>")) {
+        lines.remove(0);
+    }
+    if lines.last().is_some_and(|l| l.trim() == format!("</{tag}>")) {
+        lines.pop();
+    }
+    trim_blank(lines);
 }
 
 fn trim_blank(lines: &mut Vec<&str>) {
@@ -86,31 +99,42 @@ fn trim_blank(lines: &mut Vec<&str>) {
 mod tests {
     use super::*;
 
+    const TAG: &str = "KAKIWAKE_INPUT";
+
     #[test]
     fn strips_wrapping_fence() {
-        assert_eq!(clean("```asciidoc\n= T\n\nbody\n```\n", "# T\n\nbody"), "= T\n\nbody\n");
+        assert_eq!(clean("```asciidoc\n= T\n\nbody\n```\n", "# T\n\nbody", TAG), "= T\n\nbody\n");
     }
 
     #[test]
     fn keeps_fence_when_source_is_code() {
         let s = "```\ncode\n```";
-        assert_eq!(clean(s, s), "```\ncode\n```\n");
+        assert_eq!(clean(s, s, TAG), "```\ncode\n```\n");
     }
 
     #[test]
     fn keeps_inner_code_blocks() {
         let s = "```\na\n```\n\ntext\n\n```\nb\n```";
-        assert_eq!(clean(s, "x"), format!("{s}\n"));
+        assert_eq!(clean(s, "x", TAG), format!("{s}\n"));
     }
 
     #[test]
     fn strips_preface() {
-        assert_eq!(clean("以下が変換結果です。\n\nh1. T\n\nbody", "# T\n\nbody"), "h1. T\n\nbody\n");
-        assert_eq!(clean("Here is the converted document:\n```\n= T\nx\n```", "# T\nx"), "= T\nx\n");
+        assert_eq!(clean("以下が変換結果です。\n\nh1. T\n\nbody", "# T\n\nbody", TAG), "h1. T\n\nbody\n");
+        assert_eq!(clean("Here is the converted document:\n```\n= T\nx\n```", "# T\nx", TAG), "= T\nx\n");
+    }
+
+    #[test]
+    fn keeps_tag_like_lines_inside_content() {
+        // 元の文書にタグと同じ文字列があっても（入力側は別名のタグを使う）、本文の行は消さない
+        let out = "h1. T\n\n<pre>\n<KAKIWAKE_INPUT>\n</KAKIWAKE_INPUT>\n</pre>\n";
+        assert_eq!(clean(out, "x", "KAKIWAKE_INPUT_1"), out);
+        assert_eq!(clean(&format!("<KAKIWAKE_INPUT_1>\n{out}</KAKIWAKE_INPUT_1>"), "x", "KAKIWAKE_INPUT_1"), out);
     }
 
     #[test]
     fn strips_echoed_tags() {
-        assert_eq!(clean("<KAKIWAKE_INPUT>\nh1. T\n</KAKIWAKE_INPUT>", "# T"), "h1. T\n");
+        assert_eq!(clean("以下が変換結果です:\n\n<KAKIWAKE_INPUT>\nh1. T\n</KAKIWAKE_INPUT>", "# T", TAG), "h1. T\n");
+        assert_eq!(clean("<KAKIWAKE_INPUT>\nh1. T\n</KAKIWAKE_INPUT>", "# T", TAG), "h1. T\n");
     }
 }

@@ -54,7 +54,7 @@
       [catalog, settings] = await Promise.all([api.catalog(), api.getSettings()]);
       to = settings.last_to ?? "md";
       from = settings.last_from ?? "auto";
-      statuses = await api.checkProviders();
+      await refreshStatuses(true);
     } catch (e) {
       fail("startup", e);
     }
@@ -152,6 +152,23 @@
     }
   }
 
+  // ログイン後などに状態を取り直す。ウィンドウに戻ったときに走らせ、連続実行は避ける
+  let lastStatusCheck = 0;
+  let checkingStatus = false;
+  async function refreshStatuses(force = false) {
+    if (checkingStatus || running) return;
+    if (!force && Date.now() - lastStatusCheck < 5000) return;
+    checkingStatus = true;
+    lastStatusCheck = Date.now();
+    try {
+      statuses = await api.checkProviders();
+    } catch (e) {
+      fail("status", e);
+    } finally {
+      checkingStatus = false;
+    }
+  }
+
   async function login() {
     try {
       await api.openLogin(provider);
@@ -170,7 +187,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onfocus={() => refreshStatuses()} />
 
 <div class="app">
   <header>
@@ -275,7 +292,7 @@
       try {
         settings = await api.saveSettings(s);
         showSettings = false;
-        statuses = await api.checkProviders();
+        await refreshStatuses(true);
       } catch (e) {
         fail("settings", e);
       }
