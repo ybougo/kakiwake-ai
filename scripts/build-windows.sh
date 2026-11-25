@@ -55,12 +55,24 @@ echo "==> フロントエンドをビルド"
 echo "==> kakiwake-ai.exe をビルド"
 export PATH="$BIN:$PATH"
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
-export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-Lnative=$XWIN_DIR/crt/lib/x86_64 -Lnative=$XWIN_DIR/sdk/lib/um/x86_64 -Lnative=$XWIN_DIR/sdk/lib/ucrt/x86_64"
+# exe に埋め込まれるソースのパス（パニック時の表示用）からユーザー名・ホームディレクトリを消す。
+# 複数一致したときは後の指定が優先されるので、広い置き換えを先に書く。
+REMAP="--remap-path-prefix=$HOME=/home/user"
+REMAP="$REMAP --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo/registry/src"
+REMAP="$REMAP --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/git/checkouts=/cargo/git"
+REMAP="$REMAP --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+REMAP="$REMAP --remap-path-prefix=$ROOT=/kakiwake-ai"
+export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS="-Lnative=$XWIN_DIR/crt/lib/x86_64 -Lnative=$XWIN_DIR/sdk/lib/um/x86_64 -Lnative=$XWIN_DIR/sdk/lib/ucrt/x86_64 $REMAP"
 export INCLUDE="$XWIN_DIR/crt/include;$XWIN_DIR/sdk/include/ucrt;$XWIN_DIR/sdk/include/um;$XWIN_DIR/sdk/include/shared"
 (cd "$ROOT" && cargo build --release -p kakiwake-ai --target "$TARGET" --features tauri/custom-protocol)
 
 EXE="$ROOT/target/$TARGET/release/kakiwake-ai.exe"
 echo "==> $EXE"
+# 念のため、ビルドした環境のパスが残っていないか確認する
+if strings -n 6 "$EXE" | grep -q -F "$HOME"; then
+  echo "警告: exe にホームディレクトリのパスが残っています（$HOME）" >&2
+  exit 1
+fi
 if [[ -n "$COPY_TO" ]]; then
   mkdir -p "$COPY_TO"
   cp "$EXE" "$COPY_TO/"
