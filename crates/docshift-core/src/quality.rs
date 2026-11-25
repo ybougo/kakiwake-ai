@@ -510,7 +510,14 @@ struct Counts {
     list_items: usize,
     table_cells: usize,
     code_blocks: usize,
+    images: usize,
 }
+
+re!(MD_IMAGE_COUNT, r"!\[[^\]]*\]\([^)\s]+");
+re!(ADOC_IMAGE_COUNT, r"image::?[^\s\[]+\[");
+re!(TX_IMAGE_COUNT, r"!(?:https?://|/)[^!\s(]+(?:\([^)\n]*\))?!");
+re!(TX_NUMBERED_PARA, r"^\d+\.\s+\S");
+re!(TX_NESTED_ITEM, r"^[#*]{2,}\s");
 
 re!(MD_TABLE_ROW, r"^\s*\|.*\|\s*$");
 re!(TX_TABLE_ROW, r"^\s*\|.*\|\s*$");
@@ -586,7 +593,8 @@ fn count_structure(text: &str, format: Format) -> Counts {
                 }
                 if TX_HEADING.is_match(line) {
                     c.headings += 1;
-                } else if TX_LIST.is_match(line) {
+                } else if TX_LIST.is_match(line) || TX_NUMBERED_PARA.is_match(line) {
+                    // 段落やコードを含む手順は「1. 手順」の段落で書く（Textile の規則）ので、項目として数える
                     c.list_items += 1;
                 } else if TX_TABLE_ROW.is_match(line) {
                     c.table_cells += line.trim().trim_matches('|').split('|').count();
@@ -595,6 +603,12 @@ fn count_structure(text: &str, format: Format) -> Counts {
             Format::Plain => {}
         }
     }
+    c.images = match format {
+        Format::Md => MD_IMAGE_COUNT.find_iter(text).count(),
+        Format::Adoc => ADOC_IMAGE_COUNT.find_iter(text).count(),
+        Format::Textile => TX_IMAGE_COUNT.find_iter(text).count(),
+        Format::Plain => 0,
+    };
     c
 }
 
@@ -632,6 +646,9 @@ fn compare_structure(source: &str, from: Format, output: &str, to: Format) -> Ve
             output: o.code_blocks,
         });
     }
+    if s.images != o.images {
+        diffs.push(StructureDiff { kind: "images", label: "画像", source: s.images, output: o.images });
+    }
     diffs
 }
 
@@ -662,7 +679,18 @@ fn lint_rules(to: Format) -> Vec<LintRule> {
     match to {
         Format::Md => v.extend([textile_heading, adoc_heading, adoc_table, adoc_source, pre, tx_link, bq]),
         Format::Adoc => v.extend([md_heading, md_link, md_table_sep, textile_heading, pre, tx_link, bq]),
-        Format::Textile => v.extend([fence, md_link, md_table_sep, adoc_heading, adoc_table, adoc_source]),
+        Format::Textile => v.extend([
+            fence,
+            md_link,
+            md_table_sep,
+            adoc_heading,
+            adoc_table,
+            adoc_source,
+            r(
+                r#""https?://[^"\s]+\.(?:svg|png|jpe?g|gif|webp)(?:\?[^"\s]*)?":"#,
+                "画像が文字のリンクになっていて表示されません（!画像URL!:リンク先 と書きます）",
+            ),
+        ]),
         Format::Plain => v.extend([
             md_heading,
             md_link,
@@ -685,6 +713,7 @@ fn lint(output: &str, to: Format) -> Vec<SyntaxIssue> {
     let rules = lint_rules(to);
     let mut issues = Vec::new();
     let mut in_code = false;
+    let mut list_restart = TextileListRestart::default();
     for (i, line) in output.lines().enumerate() {
         // コードブロック内は対象外（Markdown のフェンス、AsciiDoc の ----、Textile の <pre>）
         let t = line.trim();
@@ -701,6 +730,7 @@ fn lint(output: &str, to: Format) -> Vec<SyntaxIssue> {
         if to == Format::Textile {
             if t.starts_with("<pre>") {
                 in_code = !t.ends_with("</pre>");
+                list_restart.feed(i, "<pre>");
                 continue;
             }
             if in_code {
@@ -711,6 +741,12 @@ fn lint(output: &str, to: Format) -> Vec<SyntaxIssue> {
             }
         }
         if in_code {
+            continue;
+        }
+        if to == Format::Textile
+            && let Some(issue) = list_restart.feed(i, line)
+        {
+            issues.push(issue);
             continue;
         }
         for rule in &rules {
@@ -725,6 +761,42 @@ fn lint(output: &str, to: Format) -> Vec<SyntaxIssue> {
         }
     }
     issues
+}
+
+/// Textile の番号付きリストが段落やコードで途切れ、次の `#` で番号が 1 から振り直される箇所を見つける。
+/// 見出しを挟んだ新しいリストは対象外（意図した振り直し）。
+#[derive(Default)]
+struct TextileListRestart {
+    in_list: bool,
+    /// 直前の番号付きリストが途切れてから、見出しが出ていない
+    interrupted: bool,
+}
+
+impl TextileListRestart {
+    fn feed(&mut self, index: usize, line: &str) -> Option<SyntaxIssue> {
+        let t = line.trim_end();
+        if t.starts_with("# ") || t == "#" {
+            let restart = !self.in_list && self.interrupted;
+            self.in_list = true;
+            self.interrupted = false;
+            return restart.then(|| SyntaxIssue {
+                line: index + 1,
+                text: line.chars().take(80).collect(),
+                message: "番号付きリストが途中の段落やコードで切れ、番号が 1 から振り直されます".into(),
+            });
+        }
+        if TX_HEADING.is_match(t) {
+            self.in_list = false;
+            self.interrupted = false;
+        } else if TX_NESTED_ITEM.is_match(t) {
+            // 入れ子の項目（## / #* / ** など）はリストの続き
+        } else if self.in_list {
+            // 空行・段落・コードなどでリストが終わる
+            self.in_list = false;
+            self.interrupted = true;
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -779,6 +851,42 @@ mod tests {
         let r = check(src, Format::Plain, out, Format::Md);
         assert!(r.missing_lines.is_empty(), "{:#?}", r.missing_lines);
         assert_eq!(r.grade, Grade::Ok, "{:#?}", r);
+    }
+
+    #[test]
+    fn headings_turned_into_bold_lines_are_not_ok() {
+        let md = "# App\n\n[![CI](https://ci.example.com/b.svg)](https://ci.example.com/app)\n\nApp の説明\n\n## Setup\n\n本文です。\n\n### 認証\n\n1. トークンを取得します\n\n   説明です。\n\n2. ビルドします\n";
+        let tx = "*App*\n\n\"https://ci.example.com/b.svg\":https://ci.example.com/app\n\nApp の説明\n\n*Setup*\n\n本文です。\n\n*認証*\n\n# トークンを取得します\n\n   説明です。\n\n# ビルドします\n";
+        assert_eq!(crate::detect::detect(md), Format::Md);
+        let r = check(md, Format::Md, tx, Format::Textile);
+        assert_ne!(r.grade, Grade::Ok, "{:#?}", r);
+    }
+
+    #[test]
+    fn textile_badge_as_text_link_and_list_restart_are_flagged() {
+        let md = "# App\n\n[![CI](https://ci.example.com/b.svg?style=svg)](https://ci.example.com/app)\n\n1. 取得します\n\n   説明です。\n\n2. ビルドします\n";
+        let tx = "h1. App\n\n\"https://ci.example.com/b.svg?style=svg\":https://ci.example.com/app\n\n# 取得します\n\n説明です。\n\n# ビルドします\n";
+        let r = check(md, Format::Md, tx, Format::Textile);
+        let msgs: Vec<_> = r.syntax_issues.iter().map(|i| (i.line, i.message.as_str())).collect();
+        assert!(msgs.iter().any(|(_, m)| m.contains("画像が文字のリンク")), "{msgs:?}");
+        assert!(msgs.iter().any(|(l, m)| *l == 9 && m.contains("振り直され")), "{msgs:?}");
+        assert!(r.structure.iter().any(|d| d.kind == "images"), "{:#?}", r.structure);
+        assert_ne!(r.grade, Grade::Ok);
+    }
+
+    #[test]
+    fn textile_numbered_paragraph_steps_are_ok() {
+        let md = "# App\n\n[![CI](https://ci.example.com/b.svg)](https://ci.example.com/app)\n\n1. 取得します\n\n   説明です。\n\n   ```sh\n   ls\n   ```\n\n2. ビルドします\n";
+        let tx = "h1. App\n\n!https://ci.example.com/b.svg(CI badge)!:https://ci.example.com/app\n\n1. 取得します\n\n説明です。\n\n<pre><code class=\"sh\">\nls\n</code></pre>\n\n2. ビルドします\n";
+        let r = check(md, Format::Md, tx, Format::Textile);
+        assert_eq!(r.grade, Grade::Ok, "{:#?}", r);
+    }
+
+    #[test]
+    fn textile_nested_and_consecutive_items_are_not_restarts() {
+        let tx =
+            "h2. 対策\n\n# 一つ目\n# 二つ目\n## 入れ子\n** 箇条書きの入れ子\n# 三つ目\n\nh2. 次\n\n# 新しいリスト\n";
+        assert!(lint(tx, Format::Textile).is_empty(), "{:#?}", lint(tx, Format::Textile));
     }
 
     #[test]

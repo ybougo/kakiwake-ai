@@ -2,6 +2,8 @@
 //!
 //! cargo run -p docshift-core --bin docshift-eval -- \
 //!     [--providers claude,codex,copilot] [--model codex=gpt-6.2-sol] [--jobs 3] [--out eval-out] [--fixtures DIR]
+//!     [--cases readme.md]   # ファイル名か「ファイル名→形式」の部分一致で絞り込む（カンマ区切り）
+//!     [--recheck DIR]       # LLM を呼ばず、DIR に保存済みの出力へ品質チェックだけをかけ直す
 
 use docshift_core::quality::Grade;
 use docshift_core::{ConvertOptions, Format, Provider, ProviderConfig, convert};
@@ -23,6 +25,8 @@ const CASES: &[(&str, Format, Format)] = &[
     ("sample.textile", Format::Textile, Format::Md),
     ("sample.textile", Format::Textile, Format::Adoc),
     ("sample.textile", Format::Textile, Format::Plain),
+    ("readme.md", Format::Md, Format::Textile),
+    ("readme.md", Format::Md, Format::Adoc),
 ];
 
 struct Row {
@@ -46,6 +50,8 @@ async fn main() {
     let mut jobs = 3usize;
     let mut out_dir = PathBuf::from("eval-out");
     let mut fixtures = PathBuf::from(FIXTURES);
+    let mut filters: Vec<String> = Vec::new();
+    let mut recheck: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -68,11 +74,18 @@ async fn main() {
             "--jobs" => jobs = args.next().and_then(|s| s.parse().ok()).unwrap_or(3),
             "--out" => out_dir = PathBuf::from(args.next().unwrap_or_default()),
             "--fixtures" => fixtures = PathBuf::from(args.next().unwrap_or_default()),
+            "--recheck" => recheck = args.next().map(PathBuf::from),
+            "--cases" => filters = args.next().unwrap_or_default().split(',').map(|s| s.trim().to_string()).collect(),
             other => {
                 eprintln!("unknown argument: {other}");
                 std::process::exit(2);
             }
         }
+    }
+
+    if let Some(dir) = recheck {
+        recheck_dir(&dir, &fixtures);
+        return;
     }
 
     let mut handles = Vec::new();
@@ -84,7 +97,11 @@ async fn main() {
         let sem = Arc::new(Semaphore::new(jobs));
         let dir = out_dir.join(format!("{}-{}", p.id(), cfg.model));
         std::fs::create_dir_all(&dir).expect("create out dir");
-        for (file, from, to) in CASES {
+        let selected = CASES.iter().filter(|(file, _, to)| {
+            let name = format!("{file}→{to}");
+            filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))
+        });
+        for (file, from, to) in selected {
             let cfg = cfg.clone();
             let sem = sem.clone();
             let dir = dir.clone();
@@ -192,5 +209,27 @@ async fn run_case(
             first: None,
             notes: e.to_string().replace('\n', " "),
         },
+    }
+}
+
+/// 保存済みの出力（<provider>-<model>/<stem>.<to>.out）に品質チェックをかけ直す。
+fn recheck_dir(dir: &std::path::Path, fixtures: &std::path::Path) {
+    let mut entries: Vec<_> =
+        std::fs::read_dir(dir).expect("recheck dir").flatten().filter(|e| e.path().is_dir()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        for (file, from, to) in CASES {
+            let out = e.path().join(format!("{}.{to}.out", file.replace('.', "_")));
+            let Ok(output) = std::fs::read_to_string(&out) else { continue };
+            let src = std::fs::read_to_string(fixtures.join(file)).expect("fixture");
+            let q = docshift_core::quality::check(&src, *from, &output, *to);
+            println!(
+                "| {} | {file}→{to} | {:?} | {} | {} |",
+                e.file_name().to_string_lossy(),
+                q.grade,
+                q.score,
+                q.messages.join(" ")
+            );
+        }
     }
 }

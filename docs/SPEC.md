@@ -13,7 +13,7 @@
 | Teams 出力     | 廃止。Markdown の文字列は Teams で書式にならず、リッチテキスト（HTML）は編集しにくいため                                                                        |
 | 変換方式       | すべて LLM。ルールベースの変換は使わない                                                                                                                        |
 | プロバイダ     | Claude Code / Codex CLI / Copilot CLI の 3 つすべてに対応                                                                                                       |
-| 既定モデル     | Claude `claude-sonnet-5-5`、Codex `gpt-6.1-terra`、Copilot `mai-code-2-flash`                                                                                   |
+| 既定モデル     | Claude `claude-sonnet-5-5`、Codex `gpt-6.1-terra`、Copilot `mai-code-2`                                                                                         |
 | プレビュー     | なし                                                                                                                                                            |
 | 画面           | 入力・変換先・結果・コピー・品質バッジのみ。詳細情報は出さない                                                                                                  |
 | 進捗表示       | 生成中の文字を順に表示（Claude: stream-json の text_delta、Copilot: stdout をそのまま）。Codex は途中経過を出さないため完了時に表示。変換中は進捗バーとスピナー |
@@ -22,6 +22,8 @@
 | 外部通信       | LLM 以外への送信なし（アプリは CSP で外部接続を禁止。CLI のテレメトリ・自動更新・MCP・Web 検索は停止）                                                          |
 | 品質チェック   | 変換ごとにローカルで実行。結果を OK / WARN / NG で表示。NG のときの自動再変換は設定で選ぶ                                                                       |
 | 認証           | 各 CLI のログインをそのまま使う。起動時に状態を確認し、未ログインならログイン用コンソールを開くボタンを出す                                                     |
+
+Copilot の既定は当初 MAI Code 2 Flash だったが、AsciiDoc のバッジを Markdown のまま残す、コードブロックを壊す、推論量 `none` で Textile の見出し・表を変換し損ねる、といった失敗が Flash にだけあったため MAI Code 2 に変更した（1 件あたり約 2 秒遅い）。
 
 Claude の既定は当初 Haiku 5.5 だったが、評価で 33 件中 3 件、元にない行の追加があった。Sonnet 5.5 は 11 件中 0 件で、所要時間の差は約 1 秒だったため Sonnet に変更した。
 

@@ -23,6 +23,8 @@
   let to = $state<Format>("md");
   let output = $state("");
   let quality = $state<QualityReport | null>(null);
+  /** 実際に使った変換元（自動判定の結果を含む）。品質バッジのツールチップに出す */
+  let usedFrom = $state<{ format: Format; detected: boolean } | null>(null);
 
   let running = $state(false);
   let jobId = 0;
@@ -34,9 +36,12 @@
   const info = $derived(catalog.find((c) => c.id === provider));
   const status = $derived(statuses.find((s) => s.id === provider));
   const model = $derived(settings?.providers[provider]?.model ?? info?.default_model ?? "");
-  const qualityTitle = $derived(
-    !quality ? "" : quality.messages.length ? quality.messages.join("\n") : "問題は見つかりませんでした",
-  );
+  const qualityTitle = $derived.by(() => {
+    if (!quality) return "";
+    const label = FORMATS.find((f) => f.id === usedFrom?.format)?.label ?? "";
+    const head = usedFrom ? `変換元: ${label}${usedFrom.detected ? "（自動判定）" : ""}\n` : "";
+    return head + (quality.messages.length ? quality.messages.join("\n") : "問題は見つかりませんでした");
+  });
 
   onMount(async () => {
     try {
@@ -108,6 +113,7 @@
       if (id !== jobId) return;
       output = r.output;
       quality = r.quality;
+      usedFrom = { format: r.from, detected: r.detected_from };
     } catch (e) {
       if (id === jobId) error = errorText(e);
     } finally {

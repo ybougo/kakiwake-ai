@@ -73,8 +73,10 @@ impl Provider {
                 ModelPreset { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", note: "" },
             ],
             Provider::Copilot => &[
-                ModelPreset { id: "mai-code-2-flash", label: "MAI Code 2 Flash", note: "既定・軽量" },
-                ModelPreset { id: "mai-code-2", label: "MAI Code 2", note: "高品質" },
+                ModelPreset { id: "mai-code-2", label: "MAI Code 2", note: "既定・安定" },
+                ModelPreset {
+                    id: "mai-code-2-flash", label: "MAI Code 2 Flash", note: "やや速い・崩れることがある"
+                },
                 ModelPreset { id: "auto", label: "Auto", note: "Copilot が自動選択" },
             ],
         }

@@ -103,6 +103,7 @@ const ADOC_GUIDE: &str = "AsciiDoc (Asciidoctor):
 - Bold *text*, italic _text_, monospace `code`, strikethrough [.line-through]#text#.
 - Bullet list \"* item\", nested \"** item\", \"*** item\". Numbered list \". item\", nested \".. item\".
   Checklist \"* [ ] todo\" / \"* [x] done\".
+  To attach paragraphs or code blocks to a list item, put a line containing only \"+\" between the item (or the previous attached block) and the block, without indentation.
 - Code block:
   [source,lang]
   ----
@@ -111,7 +112,8 @@ const ADOC_GUIDE: &str = "AsciiDoc (Asciidoctor):
   (omit \",lang\" when unknown: just \"----\" delimiters).
 - Quote block: \"____\" delimiters, or \"> text\" for a single line is NOT AsciiDoc — use the ____ block.
 - Horizontal rule: \"'''\".
-- Link: URL[text] or link:URL[text]; bare URL is fine. Image: image::URL[alt].
+- Link: URL[text] or link:URL[text]; bare URL is fine. Block image: image::URL[alt]. Inline image: image:URL[alt].
+  An image that is a link (e.g. a Markdown badge [![alt](IMG)](LINK)) is image:IMG[alt,link=LINK] — never keep Markdown syntax.
 - Table:
   [options=\"header\"]
   |===
@@ -123,12 +125,19 @@ const ADOC_GUIDE: &str = "AsciiDoc (Asciidoctor):
 
 const TEXTILE_GUIDE: &str = "Redmine Textile:
 - Headings: \"h1. Title\", \"h2. Section\", \"h3. Sub\" — at the start of a line, followed by a blank line.
+  Map Markdown \"#\"→\"h1.\", \"##\"→\"h2.\", \"###\"→\"h3.\". NEVER write a heading as a bold line (*Heading*).
 - Bold *text*, italic _text_, strikethrough -text-, underline +text+, inline code @code@.
 - Bullet list \"* item\", nested \"** item\". Numbered list \"# item\", nested \"## item\". Mixed nesting \"#*\".
   There is no task list syntax: write \"* [ ] todo\" / \"* [x] done\" literally.
-- Code block: <pre>...</pre>; with a language: <pre><code class=\"ruby\">...</code></pre>.
+  List items cannot contain paragraphs or code blocks: a list ends at the first blank line, and the next \"#\" list starts again from 1.
+  So when numbered steps have their own paragraphs or code blocks (e.g. Markdown \"1. Step\" followed by indented text or code),
+  do NOT use \"#\". Write each step as a normal paragraph that starts with its number (\"1. Step\", \"2. Step\"),
+  followed by its paragraphs and <pre> blocks, without indentation.
+- Code block: <pre>...</pre>; with a language: <pre><code class=\"ruby\">...</code></pre>. Start <pre> at the beginning of a line (no indentation).
 - Quote: \"bq. text\" for one paragraph, or lines starting with \"> \".
-- Link: \"text\":URL ; bare URL is fine. Image: !URL!.
+- Link: \"text\":URL ; bare URL is fine. Image: !URL! or with alt text !URL(alt)!.
+  An image that is a link (e.g. a Markdown badge [![alt](IMG)](LINK)) is !IMG(alt)!:LINK — never \"IMG\":LINK, which shows the URL as text.
+- Line breaks inside a paragraph are kept as-is (Redmine shows them as line breaks); do not keep Markdown trailing double spaces.
 - Table: header row \"|_. Head A |_. Head B |\", body rows \"| cell 1 | cell 2 |\".
 - Horizontal rule: \"---\" on its own line with blank lines around.
 - Table of contents macro: {{toc}}. Keep Redmine macros like {{toc}} and wiki links [[Page]] as-is when the target is Textile; otherwise drop {{toc}} and keep [[Page]] as plain text \"Page\".";
